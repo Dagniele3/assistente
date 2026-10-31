@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Assistente</title>
+<meta name="description" content="Finanze, scadenze, spesa, allenamento, dieta e peso in un'unica app che funziona anche offline.">
+<meta name="theme-color" content="#111418">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="barra">
+  <a class="titolo" href="#/">Assistente</a>
+  <nav class="sezioni" id="nav">
+    <a href="#/finanze">Finanze</a>
+    <a href="#/scadenze">Scadenze</a>
+    <a href="#/spesa">Spesa</a>
+    <a href="#/allenamento">Allenamento</a>
+    <a href="#/dieta">Dieta</a>
+    <a href="#/peso">Peso</a>
+  </nav>
+  <button class="stato-sync" id="stato" type="button" title="Sincronizza ora">…</button>
+</header>
+<main id="vista"></main>
+<div class="avviso-toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
