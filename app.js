@@ -187,13 +187,29 @@ function ridisegnaSeLibero() {
 
 // ───────────────────────── Calcoli ─────────────────────────
 
+const DA_ASSEGNARE = 'Da assegnare';
+
+/** Tipo della categoria dalla scheda Categorie: Spesa (anche se vuota o sconosciuta), Entrata, Risparmio. */
+function tipoCat(nome) {
+  const c = (dati.categorie || []).find(x => x.nome === (nome || '').trim());
+  return (c && c.tipo) || 'Spesa';
+}
+
+/** Spesa netta (uscite − rimborsi) dei movimenti di Tipo Spesa nel periodo; con "categoria" solo di quella. */
 function uscite(da, a, categoria) {
   let tot = 0;
   righe('Movimenti').forEach(m => {
-    const imp = n(m['Importo (uscite negative)']);
-    if (imp >= 0 || !m.Data || m.Data < da || m.Data > a) return;
-    if (categoria !== undefined && (m.Categoria || '') !== categoria) return;
-    tot -= imp;
+    if (!m.Data || m.Data < da || m.Data > a) return;
+    if (categoria !== undefined ? (m.Categoria || '') !== categoria : tipoCat(m.Categoria) !== 'Spesa') return;
+    tot -= n(m['Importo (uscite negative)']);
+  });
+  return tot;
+}
+
+function entrate(da, a) {
+  let tot = 0;
+  righe('Movimenti').forEach(m => {
+    if (m.Data && m.Data >= da && m.Data <= a && tipoCat(m.Categoria) === 'Entrata') tot += n(m['Importo (uscite negative)']);
   });
   return tot;
 }
@@ -213,7 +229,7 @@ function calcFinanze() {
   const soglia = numPar('Soglia di attenzione (% del budget)', 0.8);
   let stato = 'neutro';
   if (budget) stato = proiezione > budget ? 'rosso' : speso > budget * soglia ? 'giallo' : 'verde';
-  const categorie = (dati.categorie || []).map(c => {
+  const categorie = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa').map(c => {
     const s = uscite(inizio, fine, c.nome);
     const sp = uscite(inizioPrec, finePrec, c.nome);
     let st = 'neutro';
@@ -222,7 +238,9 @@ function calcFinanze() {
   });
   const senza = uscite(inizio, fine, '');
   if (senza > 0) categorie.push({ nome: 'Senza categoria', speso: senza, prec: uscite(inizioPrec, finePrec, ''), budget: null, stato: 'neutro' });
-  return { speso, spesoPrec, proiezione, budget, soglia, stato, avviso: !!(budget && proiezione > budget), g, giorniMese, categorie, inizio, fine };
+  const ent = entrate(inizio, chiave(new Date(y, m + 1, 0)));
+  return { speso, spesoPrec, proiezione, budget, soglia, stato, avviso: !!(budget && proiezione > budget), g, giorniMese, categorie, inizio, fine,
+    entrate: ent, risparmio: ent - uscite(inizio, chiave(new Date(y, m + 1, 0))) };
 }
 
 function mediaMensile(categoria, mesi) {
@@ -363,10 +381,11 @@ function testoGiorni(g) {
 
 // Finanze ────────────────────────────
 
-function vistaFinanze(main) {
+function vistaFinanze(main, query) {
   const f = calcFinanze();
   const mesiMedia = numPar('Mesi per la media (simulazione)', 3);
   const cat = (dati.categorie || []).map(c => c.nome);
+  const catSpesa = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE).map(c => c.nome);
   const recenti = righe('Movimenti').slice().sort((a, b) => (a.Data < b.Data ? 1 : -1)).slice(0, 15);
   const delta = f.speso - f.spesoPrec;
   const colore = { verde: 'testo-verde', giallo: 'testo-giallo', rosso: 'testo-rosso', neutro: '' };
@@ -384,7 +403,12 @@ function vistaFinanze(main) {
       <div class="carta"><div class="etichetta">Stesso periodo mese scorso</div>
         <div class="grande num">${euro0.format(f.spesoPrec)}</div>
         <div class="riga2 ${delta > 0 ? 'testo-rosso' : 'testo-verde'}">${delta > 0 ? '+' : ''}${euro0.format(delta)} rispetto ad allora</div></div>
+      <div class="carta"><div class="etichetta">Entrate del mese</div>
+        <div class="grande num">${euro0.format(f.entrate)}</div>
+        <div class="riga2 ${f.risparmio < 0 ? 'testo-rosso' : 'testo-verde'}">risparmio ${euro0.format(f.risparmio)} (entrate − spese)</div></div>
     </div>
+
+    ${sezioneDaAssegnare()}
 
     <h2>Spesa veloce</h2>
     <form class="modulo carta" id="f-mov">
@@ -410,7 +434,7 @@ function vistaFinanze(main) {
     <h2>Simulazione: se riducessi…</h2>
     <div class="carta">
       <p class="piccolo">Media mensile degli ultimi ${mesiMedia} mesi interi. Sposta i cursori per vedere quanto risparmieresti.</p>
-      <div id="sim">${cat.map(c => {
+      <div id="sim">${catSpesa.map(c => {
         const media = mediaMensile(c, mesiMedia);
         return `<div class="slider-riga" data-media="${media}">
           <div>${esc(c)}<div class="piccolo num">${euro0.format(media)} / mese</div></div>
@@ -453,6 +477,64 @@ function vistaFinanze(main) {
   });
   collegaElimina(main, 'Movimenti');
   collegaCasa(main);
+  collegaDaAssegnare(main);
+  if (query && query.get('vista') === 'assegna' && $('#da-assegnare', main)) setTimeout(() => $('#da-assegnare', main).scrollIntoView(), 0);
+}
+
+// Da assegnare (movimenti importati dalla banca senza categoria sicura) ────────────────────────────
+
+function sezioneDaAssegnare() {
+  const da = righe('Movimenti').filter(m => (m.Categoria || '').trim() === DA_ASSEGNARE)
+    .sort((a, b) => (a.Data < b.Data ? 1 : -1));
+  if (!da.length) return '';
+  const scelte = (dati.categorie || []).filter(c => c.nome !== DA_ASSEGNARE).map(c => c.nome);
+  return `
+    <h2 id="da-assegnare">Da assegnare (${da.length})</h2>
+    <ul class="elenco carta">${da.map(m => `<li data-mov="${esc(m.ID)}">
+      <div class="corpo"><div>${esc(m.Descrizione)}</div><div class="sotto">${dataBreve(m.Data)}</div>
+        <div class="ricorda" hidden></div></div>
+      <div class="num">${euro.format(n(m['Importo (uscite negative)']))}</div>
+      <select data-assegna="${esc(m.ID)}" aria-label="Categoria"><option value="">Scegli…</option>${scelte.map(c => `<option>${esc(c)}</option>`).join('')}</select>
+    </li>`).join('')}</ul>`;
+}
+
+/** Parola da proporre come parola chiave: la prima parola significativa della descrizione ("Bonifico a Stella…" → "stella"). */
+function parolaProposta(descr) {
+  const t = String(descr || '').replace(/\(in attesa\)/i, '').replace(/^(Bonifico (a|da)|Bancomat Pay( ricevuto)?|Storno)\s+/i, '');
+  const w = t.split(/[\s–\-*]+/).find(x => x.replace(/[^\p{L}]/gu, '').length >= 3);
+  return w ? normalizza(w.replace(/[^\p{L}\p{N}.']/gu, '')) : '';
+}
+
+function collegaDaAssegnare(main) {
+  $$('[data-assegna]', main).forEach(sel => {
+    sel.onchange = () => {
+      const categoria = sel.value;
+      if (!categoria) return;
+      const li = sel.closest('li'), m = righe('Movimenti').find(x => x.ID === sel.dataset.assegna);
+      salva('Movimenti', { 'Categoria': categoria }, sel.dataset.assegna);
+      toast(categoria);
+      li.classList.add('fatto');
+      sel.disabled = true;
+      // Facoltativo: ricordare la parola chiave, così la prossima volta la categoria arriva da sola.
+      const parola = parolaProposta(m && m.Descrizione);
+      const box = $('.ricorda', li);
+      box.hidden = false;
+      box.innerHTML = `<input value="${esc(parola)}" aria-label="Parola chiave" style="width:10em">
+        <button class="piccolo-b" type="button">Ricorda per ${esc(categoria)}</button>`;
+      $('button', box).onclick = async () => {
+        const p = $('input', box).value.trim();
+        if (p.length < 3) { toast('Parola troppo corta'); return; }
+        try {
+          const r = await api('parolaChiave', { categoria, parola: p });
+          toast('Ricordata' + (r.applicate ? ': assegnati altri ' + r.applicate : ''));
+          box.hidden = true;
+          sincronizza();
+        } catch (e) {
+          toast('Serve la rete: ' + (e.message || e));
+        }
+      };
+    };
+  });
 }
 
 // Casa (mutuo dai Parametri, bollette dalla scheda Bollette) ────────────────────────────
