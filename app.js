@@ -214,18 +214,39 @@ function entrate(da, a) {
   return tot;
 }
 
-function calcFinanze() {
+/** Budget totale: somma dei budget delle categorie di Tipo Spesa; se nessuna ne ha, il parametro "Budget mensile (€)". */
+function budgetTotale() {
+  const s = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa').reduce((t, c) => t + (n(c.budget) || 0), 0);
+  return s > 0 ? s : numPar('Budget mensile (€)', null);
+}
+
+/** Mese "yyyy-mm" da mostrare: quello chiesto, altrimenti il corrente (nei giorni 1–3 il precedente). */
+function meseDefault() {
+  const o = new Date();
+  return chiave(new Date(o.getFullYear(), o.getMonth() - (o.getDate() <= 3 ? 1 : 0), 1)).slice(0, 7);
+}
+function spostaMese(m, k) { const d = daChiave(m + '-01'); return chiave(new Date(d.getFullYear(), d.getMonth() + k, 1)).slice(0, 7); }
+function nomeMese(m, breve) {
+  return daChiave(m + '-01').toLocaleDateString('it-IT', breve ? { month: 'short' } : { month: 'long', year: 'numeric' });
+}
+
+/** Numeri del mese "yyyy-mm" (default: mese corrente). Mese in corso: fino a oggi, con proiezione; mese chiuso: intero. */
+function calcFinanze(mese) {
   const oggi = new Date();
-  const y = oggi.getFullYear(), m = oggi.getMonth(), g = oggi.getDate();
+  const corrente = chiave(oggi).slice(0, 7);
+  mese = mese || corrente;
+  const d0 = daChiave(mese + '-01'), y = d0.getFullYear(), m = d0.getMonth();
+  const inCorso = mese === corrente;
   const giorniMese = new Date(y, m + 1, 0).getDate();
-  const inizio = chiave(new Date(y, m, 1)), fine = chiave(oggi);
+  const g = inCorso ? oggi.getDate() : giorniMese;
+  const inizio = chiave(new Date(y, m, 1)), fine = chiave(new Date(y, m, g)), fineMese = chiave(new Date(y, m, giorniMese));
   const giorniPrec = new Date(y, m, 0).getDate();
   const inizioPrec = chiave(new Date(y, m - 1, 1));
   const finePrec = chiave(new Date(y, m - 1, Math.min(g, giorniPrec)));
   const speso = uscite(inizio, fine);
   const spesoPrec = uscite(inizioPrec, finePrec);
-  const proiezione = speso / g * giorniMese;
-  const budget = numPar('Budget mensile (€)', null);
+  const proiezione = inCorso ? speso / g * giorniMese : speso;
+  const budget = budgetTotale();
   const soglia = numPar('Soglia di attenzione (% del budget)', 0.8);
   let stato = 'neutro';
   if (budget) stato = proiezione > budget ? 'rosso' : speso > budget * soglia ? 'giallo' : 'verde';
@@ -238,9 +259,9 @@ function calcFinanze() {
   });
   const senza = uscite(inizio, fine, '');
   if (senza > 0) categorie.push({ nome: 'Senza categoria', speso: senza, prec: uscite(inizioPrec, finePrec, ''), budget: null, stato: 'neutro' });
-  const ent = entrate(inizio, chiave(new Date(y, m + 1, 0)));
-  return { speso, spesoPrec, proiezione, budget, soglia, stato, avviso: !!(budget && proiezione > budget), g, giorniMese, categorie, inizio, fine,
-    entrate: ent, risparmio: ent - uscite(inizio, chiave(new Date(y, m + 1, 0))) };
+  const ent = entrate(inizio, fineMese);
+  return { mese, inCorso, speso, spesoPrec, proiezione, budget, soglia, stato, avviso: !!(inCorso && budget && proiezione > budget), g, giorniMese,
+    categorie, inizio, fine, entrate: ent, risparmio: ent - uscite(inizio, fineMese) };
 }
 
 function mediaMensile(categoria, mesi) {
@@ -302,7 +323,7 @@ function pastiOggi() {
 // ───────────────────────── Router ─────────────────────────
 
 const VISTE = {
-  '': vistaHome, finanze: vistaFinanze, scadenze: vistaScadenze, spesa: vistaSpesa,
+  '': vistaHome, finanze: vistaFinanze, movimenti: vistaMovimenti, budget: vistaBudget, scadenze: vistaScadenze, spesa: vistaSpesa,
   allenamento: vistaAllenamento, dieta: vistaDieta, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
 };
 
@@ -382,35 +403,47 @@ function testoGiorni(g) {
 // Finanze ────────────────────────────
 
 function vistaFinanze(main, query) {
-  const f = calcFinanze();
+  const mese = (query && query.get('mese')) || meseDefault();
+  const f = calcFinanze(mese);
   const mesiMedia = numPar('Mesi per la media (simulazione)', 3);
   const cat = (dati.categorie || []).map(c => c.nome);
   const catSpesa = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE).map(c => c.nome);
-  const recenti = righe('Movimenti').slice().sort((a, b) => (a.Data < b.Data ? 1 : -1)).slice(0, 15);
-  const delta = f.speso - f.spesoPrec;
-  const colore = { verde: 'testo-verde', giallo: 'testo-giallo', rosso: 'testo-rosso', neutro: '' };
+  const recenti = righe('Movimenti').slice().sort((a, b) => (a.Data < b.Data ? 1 : -1)).slice(0, 8);
+  const delta = f.spesoPrec ? (f.speso - f.spesoPrec) / f.spesoPrec : 0;
+  const daAss = righe('Movimenti').filter(m => (m.Categoria || '').trim() === DA_ASSEGNARE).length;
+  const resta = f.budget ? f.budget - f.proiezione : null;
+  const catMese = f.categorie.filter(c => c.speso > 0.5).sort((a, b) => b.speso - a.speso);
 
   main.innerHTML = `
-    <h1>Finanze</h1>
+    <div class="testata"><h1>Finanze</h1>${selettoreMese('finanze', mese)}</div>
     ${f.avviso ? `<div class="avviso-box"><strong>Occhio:</strong> a questo ritmo il mese chiude a ${euro0.format(f.proiezione)}, oltre il budget di ${euro0.format(f.budget)}.</div>` : ''}
-    <div class="griglia">
-      <div class="carta"><div class="etichetta">Speso nel mese</div>
-        <div class="grande num ${colore[f.stato]}">${euro.format(f.speso)}</div>
-        <div class="riga2">${f.budget ? 'su ' + euro0.format(f.budget) + ' di budget (' + pct.format(f.speso / f.budget) + ')' : 'Budget non impostato (scheda Parametri)'}</div></div>
-      <div class="carta"><div class="etichetta">Proiezione a fine mese</div>
-        <div class="grande num">${euro0.format(f.proiezione)}</div>
-        <div class="riga2">media ${euro.format(f.speso / f.g)} al giorno × ${f.giorniMese} giorni</div></div>
-      <div class="carta"><div class="etichetta">Stesso periodo mese scorso</div>
-        <div class="grande num">${euro0.format(f.spesoPrec)}</div>
-        <div class="riga2 ${delta > 0 ? 'testo-rosso' : 'testo-verde'}">${delta > 0 ? '+' : ''}${euro0.format(delta)} rispetto ad allora</div></div>
-      <div class="carta"><div class="etichetta">Entrate del mese</div>
-        <div class="grande num">${euro0.format(f.entrate)}</div>
-        <div class="riga2 ${f.risparmio < 0 ? 'testo-rosso' : 'testo-verde'}">risparmio ${euro0.format(f.risparmio)} (entrate − spese)</div></div>
+    <button class="primario largo-tutto" type="button" id="vai-spesa">＋ Spesa veloce</button>
+    <div class="griglia-2">
+      <a class="carta" href="#/movimenti?mese=${mese}"><div class="etichetta">Speso</div>
+        <div class="grande num">${euro0.format(f.speso)}</div>
+        <div class="riga2">vs ${nomeMese(f.inCorso ? spostaMese(mese, -1) : spostaMese(mese, -1), true)} <span class="${delta > 0 ? 'testo-giallo' : 'testo-verde'}">${delta > 0 ? '+' : ''}${pct.format(delta)}</span></div></a>
+      <a class="carta" href="#/budget"><div class="etichetta">${f.inCorso ? 'Fine mese vs budget' : 'Vs budget'}</div>
+        <div class="grande num">${f.budget ? '/ ' + euro0.format(f.budget) : '—'}</div>
+        <div class="riga2 ${resta == null ? '' : resta >= 0 ? 'testo-verde' : 'testo-giallo'}">${resta == null ? 'imposta i budget' : (resta >= 0 ? 'restano ' : 'sfori di ') + euro0.format(Math.abs(resta))}</div></a>
+      <div class="carta"><div class="etichetta">Risparmio</div>
+        <div class="grande num ${f.risparmio < 0 ? 'testo-giallo' : 'testo-verde'}">${f.risparmio >= 0 ? '+' : ''}${euro0.format(f.risparmio)}</div>
+        <div class="riga2">entrate ${euro0.format(f.entrate)}</div></div>
+      <a class="carta ${daAss ? 'evidenza' : ''}" href="#/movimenti?filtro=assegnare"><div class="etichetta">Da assegnare</div>
+        <div class="grande num ${daAss ? 'testo-giallo' : 'testo-verde'}">${daAss}</div>
+        <div class="riga2">${daAss ? 'tocca per sistemarli' : 'tutto a posto'}</div></a>
     </div>
+
+    <h2>Categorie · ${nomeMese(mese)}</h2>
+    <ul class="elenco carta">${catMese.length ? catMese.map(c => `<li class="toccabile" data-cat="${esc(c.nome)}">
+      <div class="corpo">${esc(c.nome)}</div>
+      <div class="num ${c.budget && c.speso > c.budget ? 'testo-giallo' : ''}">${euro0.format(c.speso)}${c.budget ? ' <span class="piccolo">/ ' + euro0.format(c.budget) + '</span>' : ''}</div></li>`).join('')
+      : '<li class="vuoto">Nessuna spesa nel mese.</li>'}
+      <li class="toccabile" data-vai="#/movimenti?mese=${mese}"><div class="corpo piccolo">tocca una categoria → movimenti</div><div>›</div></li></ul>
+    <div class="azioni"><a class="bottone" href="#/movimenti?mese=${mese}">Tutti i movimenti</a><a class="bottone" href="#/budget">Budget e simulazione</a></div>
 
     ${sezioneDaAssegnare()}
 
-    <h2>Spesa veloce</h2>
+    <h2 id="spesa-veloce">Spesa veloce</h2>
     <form class="modulo carta" id="f-mov">
       <label class="campo">Importo (€)<input name="importo" type="number" step="0.01" min="0" inputmode="decimal" required></label>
       <label class="campo largo">Descrizione<input name="descrizione" required></label>
@@ -419,30 +452,6 @@ function vistaFinanze(main, query) {
       <label class="campo">Tipo<select name="tipo"><option value="uscita">Uscita</option><option value="entrata">Entrata</option></select></label>
       <button class="primario" type="submit">Aggiungi</button>
     </form>
-
-    <h2>Categorie, dall'inizio del mese</h2>
-    <div class="carta tabella-scorre"><table>
-      <thead><tr><th></th><th>Categoria</th><th class="n">Speso</th><th class="n">Budget</th><th class="n">Stesso periodo prima</th></tr></thead>
-      <tbody>${f.categorie.map(c => `<tr>
-        <td><span class="pallino ${c.stato === 'neutro' ? '' : c.stato}"></span></td>
-        <td>${esc(c.nome)}</td>
-        <td class="n">${euro.format(c.speso)}</td>
-        <td class="n">${c.budget ? euro0.format(c.budget) : '—'}</td>
-        <td class="n">${euro.format(c.prec)}</td></tr>`).join('')}</tbody>
-    </table></div>
-
-    <h2>Simulazione: se riducessi…</h2>
-    <div class="carta">
-      <p class="piccolo">Media mensile degli ultimi ${mesiMedia} mesi interi. Sposta i cursori per vedere quanto risparmieresti.</p>
-      <div id="sim">${catSpesa.map(c => {
-        const media = mediaMensile(c, mesiMedia);
-        return `<div class="slider-riga" data-media="${media}">
-          <div>${esc(c)}<div class="piccolo num">${euro0.format(media)} / mese</div></div>
-          <input type="range" min="0" max="100" step="5" value="0" aria-label="Riduzione ${esc(c)}">
-          <div class="num" data-out>0% · ${euro0.format(0)}</div></div>`;
-      }).join('')}</div>
-      <p class="grande num" id="sim-tot" style="margin:14px 0 0">Risparmio: ${euro0.format(0)} al mese</p>
-    </div>
 
     ${sezioneCasa()}
 
@@ -466,19 +475,234 @@ function vistaFinanze(main, query) {
     toast('Movimento aggiunto');
     disegna();
   };
-  $$('#sim .slider-riga').forEach(r => {
-    $('input', r).oninput = () => {
-      const v = Number($('input', r).value) / 100;
-      $('[data-out]', r).textContent = pct.format(v) + ' · ' + euro0.format(Number(r.dataset.media) * v);
-      let tot = 0;
-      $$('#sim .slider-riga').forEach(x => { tot += Number(x.dataset.media) * Number($('input', x).value) / 100; });
-      $('#sim-tot').textContent = 'Risparmio: ' + euro0.format(tot) + ' al mese, ' + euro0.format(tot * 12) + ' all\'anno';
-    };
+  collegaMese(main);
+  $('#vai-spesa', main).onclick = () => { $('#spesa-veloce', main).scrollIntoView(); $('#f-mov input[name=importo]', main).focus(); };
+  $$('[data-cat]', main).forEach(li => {
+    li.onclick = () => { location.hash = '#/movimenti?mese=' + mese + '&categoria=' + encodeURIComponent(li.dataset.cat); };
   });
+  $$('[data-vai]', main).forEach(li => { li.onclick = () => { location.hash = li.dataset.vai; }; });
   collegaElimina(main, 'Movimenti');
   collegaCasa(main);
   collegaDaAssegnare(main);
   if (query && query.get('vista') === 'assegna' && $('#da-assegnare', main)) setTimeout(() => $('#da-assegnare', main).scrollIntoView(), 0);
+}
+
+// Selettore del mese (Finanze, Movimenti) ────────────────────────────
+
+function selettoreMese(vista, mese) {
+  const primo = righe('Movimenti').reduce((p, m) => (m.Data && m.Data.slice(0, 7) < p ? m.Data.slice(0, 7) : p), chiave(new Date()).slice(0, 7));
+  const ultimo = chiave(new Date()).slice(0, 7);
+  return `<div class="mese-sel" data-vista="${vista}">
+    <button type="button" class="piccolo-b" data-mese="${spostaMese(mese, -1)}" ${mese <= primo ? 'disabled' : ''} aria-label="Mese prima">‹</button>
+    <span>${nomeMese(mese)}</span>
+    <button type="button" class="piccolo-b" data-mese="${spostaMese(mese, 1)}" ${mese >= ultimo ? 'disabled' : ''} aria-label="Mese dopo">›</button></div>`;
+}
+
+function collegaMese(main) {
+  $$('.mese-sel [data-mese]', main).forEach(b => {
+    b.onclick = () => {
+      const p = percorso();
+      p.query.set('mese', b.dataset.mese);
+      location.hash = '#/' + $('.mese-sel', main).dataset.vista + '?' + p.query.toString();
+    };
+  });
+}
+
+// Movimenti: elenco completo con ricerca, filtri, ordinamento, selezione e somma ────────────────────────────
+// Parametri nell'indirizzo: mese=yyyy-mm (o "tutti"), categoria=… (anche più volte), filtro=spese|entrate|assegnare, id=… (evidenziato).
+
+const statoMov = { testo: '', tipo: 'tutte', cats: [], ordine: 'data', giu: true, sel: {} };
+
+function vistaMovimenti(main, query) {
+  const q = query || new URLSearchParams();
+  const chiaveQ = q.toString();
+  if (statoMov.chiaveQ !== chiaveQ) {
+    // Arrivo da un link (tablet, Finanze): i parametri impostano i filtri; poi restano quelli scelti sulla pagina.
+    statoMov.chiaveQ = chiaveQ;
+    statoMov.mese = q.get('mese') || meseDefault();
+    statoMov.cats = q.getAll('categoria');
+    statoMov.tipo = q.get('filtro') === 'assegnare' ? 'assegnare' : q.get('filtro') === 'entrate' ? 'entrate' : q.get('filtro') === 'spese' ? 'spese' : 'tutte';
+    if (statoMov.tipo === 'assegnare' || q.get('id')) statoMov.mese = 'tutti';
+    statoMov.id = q.get('id') || '';
+    statoMov.sel = {};
+  }
+  disegnaMovimenti(main);
+}
+
+function filtraMovimenti() {
+  const s = statoMov, testo = normalizza(s.testo);
+  let l = righe('Movimenti').filter(m => m.Data);
+  if (s.mese !== 'tutti') l = l.filter(m => m.Data.slice(0, 7) === s.mese);
+  if (s.tipo === 'spese') l = l.filter(m => n(m['Importo (uscite negative)']) < 0 && tipoCat(m.Categoria) === 'Spesa');
+  if (s.tipo === 'entrate') l = l.filter(m => tipoCat(m.Categoria) === 'Entrata');
+  if (s.tipo === 'assegnare') l = l.filter(m => (m.Categoria || '').trim() === DA_ASSEGNARE);
+  if (s.cats.length) l = l.filter(m => s.cats.indexOf((m.Categoria || '').trim()) >= 0);
+  if (testo) l = l.filter(m => normalizza(m.Descrizione + ' ' + (m.Categoria || '')).indexOf(testo) >= 0);
+  const v = m => s.ordine === 'data' ? m.Data : n(m['Importo (uscite negative)']);
+  l.sort((a, b) => (v(a) < v(b) ? -1 : v(a) > v(b) ? 1 : 0) * (s.giu ? -1 : 1));
+  return l;
+}
+
+function disegnaMovimenti(main) {
+  const s = statoMov, l = filtraMovimenti();
+  const categorie = (dati.categorie || []).map(c => c.nome);
+  const spese = l.filter(m => tipoCat(m.Categoria) === 'Spesa').reduce((t, m) => t - n(m['Importo (uscite negative)']), 0);
+  const ent = l.filter(m => tipoCat(m.Categoria) === 'Entrata').reduce((t, m) => t + n(m['Importo (uscite negative)']), 0);
+  const daAss = righe('Movimenti').filter(m => (m.Categoria || '').trim() === DA_ASSEGNARE).length;
+  const mesi = [];
+  for (let m = chiave(new Date()).slice(0, 7), i = 0; i < 18; i++, m = spostaMese(m, -1)) mesi.push(m);
+  const nSel = Object.keys(s.sel).length;
+  const sommaSel = l.filter(m => s.sel[m.ID]).reduce((t, m) => t + n(m['Importo (uscite negative)']), 0);
+  const chip = (val, testo) => `<button type="button" class="chip ${s.tipo === val ? 'attivo' : ''} ${val === 'assegnare' ? 'chip-giallo' : ''}" data-tipo="${val}">${testo}</button>`;
+
+  main.innerHTML = `
+    <div class="testata"><h1>Movimenti</h1>
+      <select id="mov-mese" aria-label="Mese"><option value="tutti">tutti i mesi</option>${mesi.map(m => `<option value="${m}" ${m === s.mese ? 'selected' : ''}>${nomeMese(m)}</option>`).join('')}</select></div>
+    <input id="mov-cerca" type="search" placeholder="⌕ cerca (glovo, iren…)" value="${esc(s.testo)}" class="largo-tutto">
+    <div class="chips">${chip('tutte', 'Tutte')}${chip('spese', 'Spese')}${chip('entrate', 'Entrate')}${chip('assegnare', 'Da assegnare ' + daAss)}</div>
+    <div class="chips">
+      <details class="menu-cat"><summary class="chip ${s.cats.length ? 'attivo' : ''}">Categorie${s.cats.length ? ' (' + s.cats.length + ')' : ''} ▾</summary>
+        <div class="menu">${categorie.map(c => `<label><input type="checkbox" data-filtro-cat="${esc(c)}" ${s.cats.indexOf(c) >= 0 ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
+          ${s.cats.length ? '<button type="button" class="piccolo-b" id="cat-tutte">Tutte le categorie</button>' : ''}</div></details>
+      <button type="button" class="chip ${s.ordine === 'data' ? 'attivo' : ''}" data-ordine="data">${s.ordine === 'data' ? (s.giu ? '↓ ' : '↑ ') : ''}data</button>
+      <button type="button" class="chip ${s.ordine === 'importo' ? 'attivo' : ''}" data-ordine="importo">${s.ordine === 'importo' ? (s.giu ? '↓ ' : '↑ ') : ''}importo</button>
+    </div>
+    <p class="piccolo">${l.length} movimenti · spese ${euro0.format(spese)} · entrate ${euro0.format(ent)}</p>
+    <ul class="elenco carta movimenti">${l.length ? l.slice(0, 400).map(m => {
+      const imp = n(m['Importo (uscite negative)']);
+      return `<li data-id="${esc(m.ID)}" class="${s.sel[m.ID] ? 'selezionato' : ''} ${m.ID === s.id ? 'cercato' : ''}">
+        <input type="checkbox" data-sel="${esc(m.ID)}" ${s.sel[m.ID] ? 'checked' : ''} aria-label="Seleziona">
+        <div class="corpo"><div>${esc(m.Descrizione)}</div>
+          <div class="sotto">${dataBreve(m.Data)} · <select class="cat-riga ${(m.Categoria || '') === DA_ASSEGNARE ? 'testo-giallo' : ''}" data-cat-id="${esc(m.ID)}" aria-label="Categoria">
+            ${(categorie.indexOf(m.Categoria) < 0 ? ['<option selected>' + esc(m.Categoria || 'senza categoria') + '</option>'] : []).join('')}
+            ${categorie.map(c => `<option ${c === m.Categoria ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div></div>
+        <div class="num ${imp > 0 ? 'testo-verde' : ''}">${imp > 0 ? '+' : ''}${euro.format(imp)}</div></li>`;
+    }).join('') + (l.length > 400 ? `<li class="vuoto">… altri ${l.length - 400}: restringi con i filtri</li>` : '')
+      : '<li class="vuoto">Nessun movimento con questi filtri.</li>'}</ul>
+    <div class="barra-sel ${nSel ? 'visibile' : ''}">
+      <span>${nSel} selezionati</span><strong class="num">${euro.format(sommaSel)}</strong>
+      <select id="sel-cat" aria-label="Assegna categoria"><option value="">categoria ▾</option>${categorie.map(c => `<option>${esc(c)}</option>`).join('')}</select>
+      <button type="button" class="piccolo-b" id="sel-annulla">✕</button></div>`;
+
+  const ridisegna = () => { const y = window.scrollY; disegnaMovimenti(main); window.scrollTo(0, y); };
+  $('#mov-mese', main).onchange = e => { s.mese = e.target.value; s.sel = {}; ridisegna(); };
+  let t;
+  $('#mov-cerca', main).oninput = e => {
+    s.testo = e.target.value;
+    clearTimeout(t);
+    t = setTimeout(() => { disegnaMovimenti(main); const c = $('#mov-cerca', main); c.focus(); c.setSelectionRange(c.value.length, c.value.length); }, 250);
+  };
+  $$('[data-tipo]', main).forEach(b => { b.onclick = () => { s.tipo = b.dataset.tipo; if (s.tipo === 'assegnare') s.mese = 'tutti'; s.sel = {}; ridisegna(); }; });
+  $$('[data-ordine]', main).forEach(b => {
+    b.onclick = () => { if (s.ordine === b.dataset.ordine) s.giu = !s.giu; else { s.ordine = b.dataset.ordine; s.giu = true; } ridisegna(); };
+  });
+  $$('[data-filtro-cat]', main).forEach(cb => {
+    cb.onchange = () => {
+      const c = cb.dataset.filtroCat;
+      s.cats = cb.checked ? s.cats.concat([c]) : s.cats.filter(x => x !== c);
+      ridisegna();
+      const d = $('.menu-cat', main); if (d) d.open = true;
+    };
+  });
+  if ($('#cat-tutte', main)) $('#cat-tutte', main).onclick = () => { s.cats = []; ridisegna(); };
+  $$('[data-sel]', main).forEach(cb => {
+    cb.onchange = () => { if (cb.checked) s.sel[cb.dataset.sel] = true; else delete s.sel[cb.dataset.sel]; ridisegna(); };
+  });
+  $$('[data-cat-id]', main).forEach(sel => {
+    sel.onchange = () => { salva('Movimenti', { 'Categoria': sel.value }, sel.dataset.catId); toast(sel.value); ridisegna(); };
+  });
+  $('#sel-cat', main).onchange = e => {
+    const c = e.target.value;
+    if (!c) return;
+    Object.keys(s.sel).forEach(id => salva('Movimenti', { 'Categoria': c }, id));
+    toast(Object.keys(s.sel).length + ' → ' + c);
+    s.sel = {};
+    ridisegna();
+  };
+  $('#sel-annulla', main).onclick = () => { s.sel = {}; ridisegna(); };
+  if (s.id) {
+    const li = $('[data-id="' + CSS.escape(s.id) + '"]', main);
+    if (li) setTimeout(() => li.scrollIntoView({ block: 'center' }), 0);
+  }
+}
+
+// Budget con slider + simulazione piccola ────────────────────────────
+
+let salvaBudgetTimer = null;
+
+function vistaBudget(main) {
+  const cats = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE);
+  const oggi = new Date();
+  const da12 = chiave(new Date(oggi.getFullYear(), oggi.getMonth() - 12, 1)), a12 = chiave(new Date(oggi.getFullYear(), oggi.getMonth(), 0));
+  const entrateAnno = entrate(da12, a12), speseAnno = uscite(da12, a12);
+  const sim = LS.get('simulazione', {});
+  const entrateMedie = sim.entrate != null ? sim.entrate : Math.round(entrateAnno / 12);
+  const straord = sim.straord != null ? sim.straord : 0;
+
+  main.innerHTML = `
+    <div class="testata"><h1>Budget</h1><span class="piccolo">si salva da solo</span></div>
+    <div class="carta budget">${cats.map(c => {
+      const media = mediaMensile(c.nome, 6);
+      const max = Math.max(500, Math.ceil(Math.max(n(c.budget), media * 2) / 100) * 100);
+      return `<div class="budget-riga"><div class="budget-testa"><span>${esc(c.nome)}</span><strong class="num" data-val>${n(c.budget) ? euro0.format(n(c.budget)) : '—'}</strong></div>
+        <input type="range" min="0" max="${max}" step="10" value="${n(c.budget) || 0}" data-budget="${esc(c.nome)}" aria-label="Budget ${esc(c.nome)}">
+        <div class="piccolo">media 6 mesi ${euro0.format(media)}</div></div>`;
+    }).join('')}
+      <div class="budget-testa totale"><span>Totale</span><strong class="num" id="bud-tot"></strong></div></div>
+
+    <h2>Simulazione</h2>
+    <div class="carta">
+      <div class="griglia-3">
+        <div><div class="piccolo">al mese</div><div class="grande num" id="sim-mese"></div></div>
+        <div><div class="piccolo">in 12 mesi</div><div class="grande num" id="sim-anno"></div></div>
+        <div><div class="piccolo">vs ultimo anno</div><div class="grande num" id="sim-vs"></div></div>
+      </div>
+      <label class="campo-riga">Entrate medie (€/mese)<input type="number" id="sim-ent" value="${entrateMedie}" step="10"></label>
+      <label class="campo-riga">Spese straordinarie (€/anno)<input type="number" id="sim-str" value="${straord}" step="50"></label>
+      <p class="piccolo">Risparmio = entrate medie − budget totale − straordinarie/12. "Vs ultimo anno" confronta con quanto è
+        rimasto davvero negli ultimi 12 mesi chiusi (${euro0.format(entrateAnno - speseAnno)}).</p>
+    </div>`;
+
+  const ricalcola = () => {
+    const tot = $$('[data-budget]', main).reduce((t, r) => t + Number(r.value), 0);
+    $('#bud-tot', main).textContent = euro0.format(tot) + '/mese';
+    const ent = n($('#sim-ent', main).value), str = n($('#sim-str', main).value);
+    const mese = ent - tot - str / 12;
+    $('#sim-mese', main).textContent = '~' + euro0.format(mese);
+    $('#sim-mese', main).className = 'grande num ' + (mese >= 0 ? 'testo-verde' : 'testo-giallo');
+    $('#sim-anno', main).textContent = euro0.format(mese * 12);
+    const vs = mese * 12 - (entrateAnno - speseAnno);
+    $('#sim-vs', main).textContent = (vs >= 0 ? '+' : '') + euro0.format(vs);
+    $('#sim-vs', main).className = 'grande num ' + (vs >= 0 ? 'testo-verde' : 'testo-giallo');
+    LS.set('simulazione', { entrate: ent, straord: str });
+  };
+  $$('[data-budget]', main).forEach(r => {
+    r.oninput = () => {
+      $('[data-val]', r.closest('.budget-riga')).textContent = Number(r.value) ? euro0.format(Number(r.value)) : '—';
+      const c = (dati.categorie || []).find(x => x.nome === r.dataset.budget);
+      if (c) c.budget = Number(r.value) || null;
+      LS.set('dati', dati);
+      ricalcola();
+      clearTimeout(salvaBudgetTimer);
+      salvaBudgetTimer = setTimeout(salvaBudget, 1200);
+    };
+  });
+  $('#sim-ent', main).oninput = ricalcola;
+  $('#sim-str', main).oninput = ricalcola;
+  ricalcola();
+}
+
+/** Invia tutti i budget allo script (colonna "Budget mensile (€)" di Categorie). Senza rete riprova alla prossima modifica. */
+async function salvaBudget() {
+  const b = {};
+  (dati.categorie || []).forEach(c => { if ((c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE) b[c.nome] = n(c.budget) || 0; });
+  try {
+    await api('budget', { budget: b });
+    toast('Budget salvato');
+    if (tablet) tablet.aggiornaWidget();
+  } catch (e) {
+    toast('Budget non salvato (serve la rete): ' + (e.message || e));
+  }
 }
 
 // Da assegnare (movimenti importati dalla banca senza categoria sicura) ────────────────────────────

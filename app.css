@@ -121,3 +121,40 @@ body.quaderno-aperto { overflow: hidden; }
   .slider-riga { grid-template-columns: 1fr 90px 90px; }
   input[type=number] { width: 100px; }
 }
+
+/* Finanze v5: testata con mese, numeri chiave, movimenti, budget */
+.testata { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.testata h1 { margin: 4px 0 12px; }
+.mese-sel { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--bordo); border-radius: 999px; padding: 2px 4px; }
+.mese-sel span { min-width: 120px; text-align: center; }
+.mese-sel button { min-height: 36px; border: 0; background: none; font-size: 20px; padding: 2px 10px; }
+.largo-tutto { width: 100%; margin-bottom: 12px; }
+.griglia-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.griglia-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+.carta.evidenza { border-color: var(--giallo); }
+.toccabile { cursor: pointer; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; align-items: flex-start; }
+.chip { min-height: 36px; padding: 4px 14px; border-radius: 999px; font-size: 15px; background: var(--superficie); }
+.chip.attivo { border-color: var(--accento); color: var(--accento); }
+.chip-giallo { border-color: var(--giallo); color: var(--giallo); }
+.menu-cat { position: relative; }
+.menu-cat summary { list-style: none; display: inline-flex; align-items: center; border: 1px solid var(--bordo); cursor: pointer; }
+.menu-cat summary::-webkit-details-marker { display: none; }
+.menu-cat .menu { position: absolute; z-index: 8; top: 42px; left: 0; background: var(--superficie-2); border: 1px solid var(--bordo);
+  border-radius: 12px; padding: 8px 12px; min-width: 240px; display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
+.menu-cat label { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.movimenti li.selezionato { background: rgba(138, 180, 248, .1); }
+.movimenti li.cercato { outline: 2px solid var(--accento); border-radius: 8px; }
+.cat-riga { min-height: 0; padding: 0 4px; font-size: 14px; border: 0; background: none; color: var(--testo-2); }
+.barra-sel { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: none; align-items: center; gap: 12px;
+  background: var(--superficie-2); border: 1px solid var(--accento); border-radius: 14px; padding: 8px 12px; z-index: 9;
+  width: min(560px, calc(100% - 24px)); }
+.barra-sel.visibile { display: flex; }
+.barra-sel strong { flex: 1; text-align: right; }
+.barra-sel select { min-height: 40px; max-width: 130px; }
+.barra-sel span { white-space: nowrap; }
+.budget-riga { padding: 8px 0; border-bottom: 1px solid var(--bordo); }
+.budget-testa { display: flex; justify-content: space-between; }
+.budget-testa.totale { padding-top: 12px; font-size: 19px; }
+.budget input[type=range] { width: 100%; min-height: 0; padding: 0; background: none; border: 0; accent-color: var(--accento); }
+.campo-riga { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; color: var(--testo-2); }
