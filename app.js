@@ -25,7 +25,7 @@ let dati = LS.get('dati', null);
 let coda = LS.get('coda', []);
 let statoSync = { stato: 'idle', ultimo: LS.get('ultimoSync', null), errore: '' };
 
-const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno'];
+const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette'];
 
 function datiVuoti() {
   const schede = {};
@@ -147,7 +147,7 @@ async function sincronizza() {
       LS.set('coda', coda);
     }
     const fresco = await api('dati');
-    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, server: fresco.server };
+    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, server: fresco.server };
     coda.forEach(applicaLocale); // modifiche fatte durante l'invio
     LS.set('dati', dati);
     statoSync.ultimo = new Date().toISOString();
@@ -420,6 +420,8 @@ function vistaFinanze(main) {
       <p class="grande num" id="sim-tot" style="margin:14px 0 0">Risparmio: ${euro0.format(0)} al mese</p>
     </div>
 
+    ${sezioneCasa()}
+
     <h2>Ultimi movimenti</h2>
     <ul class="elenco carta">${recenti.length ? recenti.map(m => `<li>
       <div class="corpo"><div>${esc(m.Descrizione)}</div><div class="sotto">${dataBreve(m.Data)} · ${esc(m.Categoria || 'senza categoria')}</div></div>
@@ -450,6 +452,82 @@ function vistaFinanze(main) {
     };
   });
   collegaElimina(main, 'Movimenti');
+  collegaCasa(main);
+}
+
+// Casa (mutuo dai Parametri, bollette dalla scheda Bollette) ────────────────────────────
+
+const TIPI_BOLLETTA = { Luce: 'kWh', Gas: 'Smc', Acqua: 'm³', Altro: '' };
+
+function sezioneCasa() {
+  // La scheda Bollette esiste dallo script v3 (che manda anche "casa"): prima non si può scrivere.
+  if (!dati.casa) return '<h2>Casa</h2><div class="carta piccolo">Mutuo e bollette compaiono quando lo script del foglio è alla versione 3.</div>';
+  const mu = dati.casa.mutuo;
+  const bollette = righe('Bollette').filter(b => b.Data).sort((a, b) => (a.Data < b.Data ? 1 : -1));
+  // Importi per mese (ultimi 6 mesi, per data della bolletta) e tipo.
+  const oggi = new Date(), mesi = [];
+  for (let i = 5; i >= 0; i--) mesi.push(chiave(new Date(oggi.getFullYear(), oggi.getMonth() - i, 1)).slice(0, 7));
+  const tipi = Object.keys(TIPI_BOLLETTA).filter(t => bollette.some(b => b.Tipo === t));
+  const importo = (mese, tipo) => bollette.filter(b => b.Data.slice(0, 7) === mese && (!tipo || b.Tipo === tipo)).reduce((s, b) => s + n(b['Importo (€)']), 0);
+  const nomeMese = k => daChiave(k + '-01').toLocaleDateString('it-IT', { month: 'short', year: '2-digit' });
+  const alGiorno = b => {
+    if (!b['Periodo dal'] || !b['Periodo al'] || b.Consumo === '' || b.Consumo == null) return '—';
+    const g = giorniTra(b['Periodo dal'], b['Periodo al']) + 1;
+    return g > 0 ? num1.format(n(b.Consumo) / g) + ' ' + esc(b['Unità'] || TIPI_BOLLETTA[b.Tipo] || '') + '/g' : '—';
+  };
+  return `
+    <h2>Casa</h2>
+    <div class="griglia">
+      <div class="carta"><div class="etichetta">Mutuo</div>
+        ${mu ? `<div class="grande num">${euro.format(mu.rata)}</div>
+        <div class="riga2">${mu.prossima ? 'prossima rata ' + dataBreve(mu.prossima) + ' · ' : ''}${mu.pagate}${mu.totali ? '/' + mu.totali : ''} rate pagate</div>
+        ${mu.residuo != null ? `<div class="riga2">capitale residuo ${euro0.format(mu.residuo)}${mu.mancanti != null ? ' · mancano ' + mu.mancanti + ' rate' : ''}</div>` : ''}`
+        : '<div class="riga2">Compila nel foglio, scheda Parametri: Mutuo rata (o capitale + tasso + rate totali) e Mutuo prima rata.</div>'}</div>
+      <div class="carta"><div class="etichetta">Bollette del mese</div>
+        <div class="grande num">${euro0.format(importo(mesi[5]))}</div>
+        <div class="riga2">${tipi.map(t => esc(t) + ' ' + euro0.format(importo(mesi[5], t))).join(' · ') || 'nessuna bolletta registrata'}</div></div>
+    </div>
+    ${tipi.length ? `<div class="carta tabella-scorre"><table>
+      <thead><tr><th>Mese</th>${tipi.map(t => `<th class="n">${esc(t)}</th>`).join('')}<th class="n">Totale</th></tr></thead>
+      <tbody>${mesi.map(m => `<tr><td>${nomeMese(m)}</td>${tipi.map(t => `<td class="n">${importo(m, t) ? euro0.format(importo(m, t)) : '—'}</td>`).join('')}<td class="n">${euro0.format(importo(m))}</td></tr>`).join('')}</tbody>
+    </table></div>` : ''}
+    <h2>Nuova bolletta</h2>
+    <form class="modulo carta" id="f-bol">
+      <label class="campo">Tipo<select name="tipo">${Object.keys(TIPI_BOLLETTA).map(t => `<option>${t}</option>`).join('')}</select></label>
+      <label class="campo">Importo (€)<input name="importo" type="number" step="0.01" min="0" inputmode="decimal" required></label>
+      <label class="campo">Data<input name="data" type="date" value="${oggiK()}" required></label>
+      <label class="campo">Periodo dal<input name="dal" type="date"></label>
+      <label class="campo">Periodo al<input name="al" type="date"></label>
+      <label class="campo">Consumo<input name="consumo" type="number" step="0.01" min="0" inputmode="decimal" placeholder="kWh / Smc / m³"></label>
+      <label class="campo"><span><input name="pagata" type="checkbox"> Pagata</span></label>
+      <button class="primario" type="submit">Aggiungi</button>
+    </form>
+    ${bollette.length ? `<ul class="elenco carta">${bollette.slice(0, 12).map(b => `<li>
+      <div class="corpo"><div>${esc(b.Tipo || 'Bolletta')} · ${euro.format(n(b['Importo (€)']))}${b.Pagata === true ? '' : ' <span class="testo-giallo">da pagare</span>'}</div>
+      <div class="sotto">${dataBreve(b.Data)}${b['Periodo dal'] ? ' · dal ' + dataBreve(b['Periodo dal']) + ' al ' + dataBreve(b['Periodo al']) : ''}${b.Consumo !== '' && b.Consumo != null ? ' · ' + esc(b.Consumo) + ' ' + esc(b['Unità'] || TIPI_BOLLETTA[b.Tipo] || '') + ' (' + alGiorno(b) + ')' : ''}</div></div>
+      ${b.Pagata === true ? '' : `<button class="piccolo-b" data-pagata="${esc(b.ID)}">Pagata</button>`}
+      <button class="piccolo-b" data-elimina-bol="${esc(b.ID)}" title="Elimina">✕</button></li>`).join('')}</ul>` : ''}`;
+}
+
+function collegaCasa(main) {
+  const f = $('#f-bol', main);
+  if (!f) return;
+  f.onsubmit = e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const tipo = fd.get('tipo');
+    salva('Bollette', {
+      'Data': fd.get('data'), 'Tipo': tipo, 'Importo (€)': n(fd.get('importo')),
+      'Periodo dal': fd.get('dal') || '', 'Periodo al': fd.get('al') || '', 'Consumo': fd.get('consumo') || '',
+      'Unità': TIPI_BOLLETTA[tipo] || '', 'Pagata': fd.get('pagata') === 'on',
+    });
+    toast('Bolletta aggiunta');
+    disegna();
+  };
+  $$('[data-pagata]', main).forEach(b => { b.onclick = () => { salva('Bollette', { 'Pagata': true }, b.dataset.pagata); disegna(); }; });
+  $$('[data-elimina-bol]', main).forEach(b => {
+    b.onclick = () => { if (confirm('Eliminare questa bolletta?')) { elimina('Bollette', b.dataset.eliminaBol); disegna(); } };
+  });
 }
 
 function categorizzaLocale(descr) {
@@ -472,17 +550,23 @@ function collegaElimina(main, scheda, conferma) {
 
 const RICORRENZE = { 'Nessuna': 0, 'Mensile': 1, 'Trimestrale': 3, 'Semestrale': 6, 'Annuale': 12 };
 
-function vistaScadenze(main) {
+function vistaScadenze(main, query) {
   const s = calcScadenze();
   const limite = 30;
-  const vicine = s.aperte.filter(x => x.giorni <= limite);
-  const lontane = s.aperte.filter(x => x.giorni > limite);
+  // Filtro per categoria (es. #/scadenze?categoria=Casa per manutenzioni e scadenze di casa).
+  const filtro = (query && query.get('categoria')) || '';
+  const categorie = ['Casa'].concat(s.aperte.map(x => String(x.Categoria || '').trim()).filter(Boolean))
+    .filter((c, i, a) => a.findIndex(y => normalizza(y) === normalizza(c)) === i);
+  const scelte = filtro ? s.aperte.filter(x => normalizza(x.Categoria) === normalizza(filtro)) : s.aperte;
+  const vicine = scelte.filter(x => x.giorni <= limite);
+  const lontane = scelte.filter(x => x.giorni > limite);
   const riga = x => `<li>
     <div class="corpo"><div>${esc(x.Titolo)}</div><div class="sotto">${dataBreve(x.Data)} · ${testoGiorni(x.giorni)}${x.Categoria ? ' · ' + esc(x.Categoria) : ''}${x.Ricorrenza && x.Ricorrenza !== 'Nessuna' ? ' · ' + esc(x.Ricorrenza) : ''}</div></div>
     <button class="piccolo-b" data-chiudi="${esc(x.ID)}">Fatta</button></li>`;
 
   main.innerHTML = `
     <h1>Scadenze</h1>
+    <div class="azioni"><a class="bottone ${filtro ? '' : 'primario'}" href="#/scadenze">Tutte</a>${categorie.map(c => `<a class="bottone ${normalizza(c) === normalizza(filtro) ? 'primario' : ''}" href="#/scadenze?categoria=${encodeURIComponent(c)}">${esc(c)}</a>`).join('')}</div>
     <h2>Prossimi ${limite} giorni</h2>
     <ul class="elenco carta">${vicine.length ? vicine.map(riga).join('') : '<li class="vuoto">Niente in scadenza.</li>'}</ul>
     ${lontane.length ? `<h2>Più avanti</h2><ul class="elenco carta">${lontane.map(riga).join('')}</ul>` : ''}
@@ -490,7 +574,7 @@ function vistaScadenze(main) {
     <form class="modulo carta" id="f-scad">
       <label class="campo largo">Cosa<input name="titolo" required></label>
       <label class="campo">Data<input name="data" type="date" value="${oggiK()}" required></label>
-      <label class="campo">Categoria<input name="categoria" placeholder="es. Auto"></label>
+      <label class="campo">Categoria<input name="categoria" list="cat-scad" placeholder="es. Casa, Auto" value="${esc(filtro)}"><datalist id="cat-scad">${categorie.map(c => `<option value="${esc(c)}">`).join('')}</datalist></label>
       <label class="campo">Ricorrenza<select name="ricorrenza">${Object.keys(RICORRENZE).map(r => `<option>${r}</option>`).join('')}</select></label>
       <label class="campo">Preavviso (giorni)<input name="preavviso" type="number" min="0" value="${s.entro}"></label>
       <button class="primario" type="submit">Aggiungi</button>
