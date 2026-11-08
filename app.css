@@ -158,3 +158,18 @@ body.quaderno-aperto { overflow: hidden; }
 .budget-testa.totale { padding-top: 12px; font-size: 19px; }
 .budget input[type=range] { width: 100%; min-height: 0; padding: 0; background: none; border: 0; accent-color: var(--accento); }
 .campo-riga { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; color: var(--testo-2); }
+
+/* v6: schede di Finanze, budget dinamico, bollette, mutuo */
+.schede-fin { display: flex; gap: 6px; overflow-x: auto; margin: 0 0 14px; scrollbar-width: none; }
+.schede-fin::-webkit-scrollbar { display: none; }
+.schede-fin a { flex: none; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--bordo); color: var(--testo-2); font-size: 15px; }
+.schede-fin a.attiva { border-color: var(--accento); color: var(--accento); background: rgba(138, 180, 248, .1); font-weight: 600; }
+.lucchetto { min-height: 0; padding: 0 4px; border: 0; background: none; font-size: 14px; opacity: .45; }
+.lucchetto.chiuso { opacity: 1; }
+.quadratino { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; vertical-align: middle; flex: none; }
+.gruppi li { min-height: 46px; padding: 8px 4px; }
+.gruppi li.selezionato { background: rgba(138, 180, 248, .1); border-radius: 8px; }
+.grafico-bollette { width: 100%; height: 160px; display: block; margin: 8px 0; }
+.barra-mutuo { height: 10px; border-radius: 6px; background: var(--superficie-2); margin: 14px 0 6px; overflow: hidden; }
+.barra-mutuo span { display: block; height: 100%; background: var(--verde); border-radius: 6px; }
+.budget-testa { gap: 10px; align-items: baseline; padding: 4px 0; }

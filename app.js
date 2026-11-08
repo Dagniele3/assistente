@@ -216,6 +216,8 @@ function entrate(da, a) {
 
 /** Budget totale: somma dei budget delle categorie di Tipo Spesa; se nessuna ne ha, il parametro "Budget mensile (€)". */
 function budgetTotale() {
+  const d = budgetDin();
+  if (d) return d.totale;
   const s = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa').reduce((t, c) => t + (n(c.budget) || 0), 0);
   return s > 0 ? s : numPar('Budget mensile (€)', null);
 }
@@ -323,7 +325,7 @@ function pastiOggi() {
 // ───────────────────────── Router ─────────────────────────
 
 const VISTE = {
-  '': vistaHome, finanze: vistaFinanze, movimenti: vistaMovimenti, budget: vistaBudget, scadenze: vistaScadenze, spesa: vistaSpesa,
+  '': vistaHome, finanze: vistaFinanze, movimenti: vistaMovimenti, budget: vistaBudget, bollette: vistaBollette, mutuo: vistaMutuo, scadenze: vistaScadenze, spesa: vistaSpesa,
   allenamento: vistaAllenamento, dieta: vistaDieta, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
 };
 
@@ -338,7 +340,7 @@ function disegna() {
   if (p.nome === 'quaderno') { apriQuaderno(p.query.get('dest') || 'Nessuna'); return; }
   chiudiQuadernoSeAperto();
   const vista = VISTE[p.nome] || vistaHome;
-  $$('#nav a').forEach(a => a.classList.toggle('attiva', a.getAttribute('href') === '#/' + p.nome));
+  $$('#nav a').forEach(a => a.classList.toggle('attiva', a.getAttribute('href') === '#/' + (SCHEDE_FINANZE.some(s => s[0] === p.nome) ? 'finanze' : p.nome)));
   const main = $('#vista');
   if (!config.url || !config.token) { vistaImpostazioni(main, true); return; }
   vista(main, p.query);
@@ -416,6 +418,7 @@ function vistaFinanze(main, query) {
 
   main.innerHTML = `
     <div class="testata"><h1>Finanze</h1>${selettoreMese('finanze', mese)}</div>
+    ${schedeFinanze('finanze')}
     ${f.avviso ? `<div class="avviso-box"><strong>Occhio:</strong> a questo ritmo il mese chiude a ${euro0.format(f.proiezione)}, oltre il budget di ${euro0.format(f.budget)}.</div>` : ''}
     <button class="primario largo-tutto" type="button" id="vai-spesa">＋ Spesa veloce</button>
     <div class="griglia-2">
@@ -439,7 +442,7 @@ function vistaFinanze(main, query) {
       <div class="num ${c.budget && c.speso > c.budget ? 'testo-giallo' : ''}">${euro0.format(c.speso)}${c.budget ? ' <span class="piccolo">/ ' + euro0.format(c.budget) + '</span>' : ''}</div></li>`).join('')
       : '<li class="vuoto">Nessuna spesa nel mese.</li>'}
       <li class="toccabile" data-vai="#/movimenti?mese=${mese}"><div class="corpo piccolo">tocca una categoria → movimenti</div><div>›</div></li></ul>
-    <div class="azioni"><a class="bottone" href="#/movimenti?mese=${mese}">Tutti i movimenti</a><a class="bottone" href="#/budget">Budget e simulazione</a></div>
+    <div class="azioni"><a class="bottone" href="#/movimenti?mese=${mese}">Tutti i movimenti</a><a class="bottone primario" href="#/budget">Budget</a></div>
 
     ${sezioneDaAssegnare()}
 
@@ -453,7 +456,7 @@ function vistaFinanze(main, query) {
       <button class="primario" type="submit">Aggiungi</button>
     </form>
 
-    ${sezioneCasa()}
+    <div class="azioni"><a class="bottone" href="#/bollette">Bollette e utenze</a><a class="bottone" href="#/mutuo">Mutuo</a></div>
 
     <h2>Ultimi movimenti</h2>
     <ul class="elenco carta">${recenti.length ? recenti.map(m => `<li>
@@ -482,7 +485,6 @@ function vistaFinanze(main, query) {
   });
   $$('[data-vai]', main).forEach(li => { li.onclick = () => { location.hash = li.dataset.vai; }; });
   collegaElimina(main, 'Movimenti');
-  collegaCasa(main);
   collegaDaAssegnare(main);
   if (query && query.get('vista') === 'assegna' && $('#da-assegnare', main)) setTimeout(() => $('#da-assegnare', main).scrollIntoView(), 0);
 }
@@ -558,6 +560,7 @@ function disegnaMovimenti(main) {
   main.innerHTML = `
     <div class="testata"><h1>Movimenti</h1>
       <select id="mov-mese" aria-label="Mese"><option value="tutti">tutti i mesi</option>${mesi.map(m => `<option value="${m}" ${m === s.mese ? 'selected' : ''}>${nomeMese(m)}</option>`).join('')}</select></div>
+    ${schedeFinanze('movimenti')}
     <input id="mov-cerca" type="search" placeholder="⌕ cerca (glovo, iren…)" value="${esc(s.testo)}" class="largo-tutto">
     <div class="chips">${chip('tutte', 'Tutte')}${chip('spese', 'Spese')}${chip('entrate', 'Entrate')}${chip('assegnare', 'Da assegnare ' + daAss)}</div>
     <div class="chips">
@@ -626,76 +629,161 @@ function disegnaMovimenti(main) {
   }
 }
 
-// Budget con slider + simulazione piccola ────────────────────────────
+// Schede di Finanze (SPEC v6 §F1) ────────────────────────────
+
+const SCHEDE_FINANZE = [['finanze', 'Panoramica'], ['movimenti', 'Movimenti'], ['budget', 'Budget'], ['bollette', 'Bollette'], ['mutuo', 'Mutuo']];
+
+function schedeFinanze(attiva) {
+  return `<nav class="schede-fin">${SCHEDE_FINANZE.map(s => `<a href="#/${s[0]}" class="${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`).join('')}</nav>`;
+}
+
+// Budget dinamico (SPEC v6 §F2) ────────────────────────────
+// Totale = media delle ENTRATE dei 3 mesi chiusi − risparmio programmato. Categorie (Tipo Spesa) collegate a totale fisso:
+// alzandone una, le altre non bloccate scendono in proporzione al loro peso. Salvataggio: colonna "Budget mensile (€)"
+// di Categorie (azione budget) e parametro "Risparmio programmato (%)" (azione parametri).
 
 let salvaBudgetTimer = null;
+const RISPARMI = [5, 10, 15, 20];
+
+/** Categorie che ricevono un budget: Tipo Spesa, escluso "Da assegnare". */
+function catBudget() { return (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE); }
+
+/** Spesa per categoria nei 3 mesi chiusi precedenti (per le proporzioni). */
+function spesa3Mesi() {
+  const o = new Date(), da = chiave(new Date(o.getFullYear(), o.getMonth() - 3, 1)), a = chiave(new Date(o.getFullYear(), o.getMonth(), 0));
+  const out = {};
+  catBudget().forEach(c => { out[c.nome] = Math.max(0, uscite(da, a, c.nome)); });
+  return out;
+}
+
+/** Budget proporzionali alla spesa dei 3 mesi, arrotondati a 10 € (l'ultimo assorbe l'arrotondamento). */
+function proporzioni(totale, bloccate, attuali) {
+  const s3 = spesa3Mesi(), nomi = Object.keys(s3);
+  const fissi = nomi.filter(x => bloccate[x]).reduce((t, x) => t + (attuali[x] || 0), 0);
+  const liberi = nomi.filter(x => !bloccate[x]);
+  const peso = liberi.reduce((t, x) => t + s3[x], 0) || liberi.length;
+  const out = Object.assign({}, attuali);
+  let resto = Math.max(0, totale - fissi);
+  liberi.forEach((x, i) => {
+    const v = i === liberi.length - 1 ? resto : Math.round(Math.max(0, totale - fissi) * (s3[x] || (peso === liberi.length ? 1 : 0)) / peso / 10) * 10;
+    out[x] = Math.max(0, Math.min(v, resto));
+    resto -= out[x];
+  });
+  return out;
+}
+
+/** Media entrate dei 3 mesi chiusi, risparmio (%) e totale da spendere; null senza entrate. */
+function budgetDin(rispOverride) {
+  const o = new Date(), da = chiave(new Date(o.getFullYear(), o.getMonth() - 3, 1)), a = chiave(new Date(o.getFullYear(), o.getMonth(), 0));
+  let media = entrate(da, a) / 3;
+  if (!(media > 0) && dati.budgetDinamico) media = dati.budgetDinamico.mediaEntrate;
+  const rp = par('Risparmio programmato (%)');
+  let r = rispOverride != null ? rispOverride : rp === '' || rp == null ? null : n(rp);
+  if (r != null && r > 0 && r < 1) r *= 100;
+  if (!(media > 0) || r == null) return null;
+  return { media, risparmio: r, totale: Math.round(media * (1 - r / 100) / 10) * 10 };
+}
 
 function vistaBudget(main) {
-  const cats = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE);
-  const oggi = new Date();
-  const da12 = chiave(new Date(oggi.getFullYear(), oggi.getMonth() - 12, 1)), a12 = chiave(new Date(oggi.getFullYear(), oggi.getMonth(), 0));
-  const entrateAnno = entrate(da12, a12), speseAnno = uscite(da12, a12);
-  const sim = LS.get('simulazione', {});
-  const entrateMedie = sim.entrate != null ? sim.entrate : Math.round(entrateAnno / 12);
-  const straord = sim.straord != null ? sim.straord : 0;
+  const cats = catBudget();
+  const din = budgetDin() || budgetDin(10) || { media: 0, risparmio: 10, totale: 0 };
+  const bloccate = LS.get('budgetBloccate', {});
+  const modo = LS.get('budgetModo', 'euro');
+  const attuali = {};
+  cats.forEach(c => { attuali[c.nome] = n(c.budget) || 0; });
+  const somma = Object.values(attuali).reduce((a, b) => a + b, 0);
+  // Prima volta (o totale cambiato): budget proporzionali alla spesa dei 3 mesi.
+  let budget = Math.abs(somma - din.totale) > 15 ? proporzioni(din.totale, bloccate, attuali) : attuali;
+  const daSalvare = budget !== attuali;
+  const s3 = spesa3Mesi();
+
+  const riga = c => `<div class="budget-riga" data-riga="${esc(c.nome)}">
+      <div class="budget-testa"><span>${esc(c.nome)} <button type="button" class="lucchetto ${bloccate[c.nome] ? 'chiuso' : ''}" data-blocca="${esc(c.nome)}"
+        aria-label="Blocca ${esc(c.nome)}">${bloccate[c.nome] ? '🔒' : '🔓'}</button></span><strong class="num" data-val></strong></div>
+      <input type="range" min="0" max="${din.totale}" step="10" value="${budget[c.nome] || 0}" data-budget="${esc(c.nome)}" aria-label="Budget ${esc(c.nome)}">
+      <div class="piccolo">ultimi 3 mesi ${euro0.format(s3[c.nome] / 3)}/mese</div></div>`;
 
   main.innerHTML = `
-    <div class="testata"><h1>Budget</h1><span class="piccolo">si salva da solo</span></div>
-    <div class="carta budget">${cats.map(c => {
-      const media = mediaMensile(c.nome, 6);
-      const max = Math.max(500, Math.ceil(Math.max(n(c.budget), media * 2) / 100) * 100);
-      return `<div class="budget-riga"><div class="budget-testa"><span>${esc(c.nome)}</span><strong class="num" data-val>${n(c.budget) ? euro0.format(n(c.budget)) : '—'}</strong></div>
-        <input type="range" min="0" max="${max}" step="10" value="${n(c.budget) || 0}" data-budget="${esc(c.nome)}" aria-label="Budget ${esc(c.nome)}">
-        <div class="piccolo">media 6 mesi ${euro0.format(media)}</div></div>`;
-    }).join('')}
-      <div class="budget-testa totale"><span>Totale</span><strong class="num" id="bud-tot"></strong></div></div>
-
-    <h2>Simulazione</h2>
+    <div class="testata"><h1>Budget</h1><span class="piccolo">${nomeMese(chiave(new Date()).slice(0, 7))} · si salva da solo</span></div>
+    ${schedeFinanze('budget')}
     <div class="carta">
-      <div class="griglia-3">
-        <div><div class="piccolo">al mese</div><div class="grande num" id="sim-mese"></div></div>
-        <div><div class="piccolo">in 12 mesi</div><div class="grande num" id="sim-anno"></div></div>
-        <div><div class="piccolo">vs ultimo anno</div><div class="grande num" id="sim-vs"></div></div>
-      </div>
-      <label class="campo-riga">Entrate medie (€/mese)<input type="number" id="sim-ent" value="${entrateMedie}" step="10"></label>
-      <label class="campo-riga">Spese straordinarie (€/anno)<input type="number" id="sim-str" value="${straord}" step="50"></label>
-      <p class="piccolo">Risparmio = entrate medie − budget totale − straordinarie/12. "Vs ultimo anno" confronta con quanto è
-        rimasto davvero negli ultimi 12 mesi chiusi (${euro0.format(entrateAnno - speseAnno)}).</p>
+      <div class="etichetta">Budget totale</div>
+      <div class="budget-testa"><span>media entrate 3 mesi</span><strong class="num">${euro0.format(din.media)}</strong></div>
+      <div class="budget-testa" style="align-items:center;margin-top:8px"><span>risparmio programmato</span>
+        <span class="chips" style="margin:0">${RISPARMI.map(r => `<button type="button" class="chip ${r === din.risparmio ? 'attivo' : ''}" data-risparmio="${r}">−${r}%</button>`).join('')}</span></div>
+      <div class="budget-testa totale"><span>da spendere</span><strong class="num grande">${euro0.format(din.totale)}</strong></div>
+      <div class="testo-verde">risparmio previsto ${euro0.format(din.media - din.totale)}/mese · ${euro0.format((din.media - din.totale) * 12)} in 12 mesi</div>
+    </div>
+    <div class="carta budget" style="margin-top:12px">
+      <div class="budget-testa"><span class="etichetta" style="margin:0">Per categoria</span>
+        <span class="chips" style="margin:0"><button type="button" class="chip ${modo === 'euro' ? 'attivo' : ''}" data-modo="euro">€</button><button type="button" class="chip ${modo === 'pct' ? 'attivo' : ''}" data-modo="pct">%</button></span></div>
+      <p class="piccolo">Proporzionale alla spesa degli ultimi 3 mesi. Se ne alzi una, le altre scendono; 🔒 = bloccata.</p>
+      ${cats.map(riga).join('')}
+      <div class="budget-testa totale"><button type="button" class="piccolo-b" id="bud-ripristina">↺ ripristina proporzioni</button><strong class="num" id="bud-tot"></strong></div>
     </div>`;
 
-  const ricalcola = () => {
-    const tot = $$('[data-budget]', main).reduce((t, r) => t + Number(r.value), 0);
-    $('#bud-tot', main).textContent = euro0.format(tot) + '/mese';
-    const ent = n($('#sim-ent', main).value), str = n($('#sim-str', main).value);
-    const mese = ent - tot - str / 12;
-    $('#sim-mese', main).textContent = '~' + euro0.format(mese);
-    $('#sim-mese', main).className = 'grande num ' + (mese >= 0 ? 'testo-verde' : 'testo-giallo');
-    $('#sim-anno', main).textContent = euro0.format(mese * 12);
-    const vs = mese * 12 - (entrateAnno - speseAnno);
-    $('#sim-vs', main).textContent = (vs >= 0 ? '+' : '') + euro0.format(vs);
-    $('#sim-vs', main).className = 'grande num ' + (vs >= 0 ? 'testo-verde' : 'testo-giallo');
-    LS.set('simulazione', { entrate: ent, straord: str });
+  const mostra = () => {
+    let tot = 0;
+    $$('[data-budget]', main).forEach(r => {
+      const v = Number(r.value);
+      tot += v;
+      $('[data-val]', r.closest('.budget-riga')).textContent = modo === 'pct' ? pct.format(din.totale ? v / din.totale : 0) + ' · ' + euro0.format(v)
+        : euro0.format(v) + ' · ' + pct.format(din.totale ? v / din.totale : 0);
+    });
+    $('#bud-tot', main).textContent = 'totale ' + euro0.format(tot);
+  };
+  const applica = b => {
+    budget = b;
+    $$('[data-budget]', main).forEach(r => { r.value = budget[r.dataset.budget] || 0; });
+    cats.forEach(c => { c.budget = budget[c.nome] || null; });
+    LS.set('dati', dati);
+    mostra();
+    clearTimeout(salvaBudgetTimer);
+    salvaBudgetTimer = setTimeout(salvaBudget, 1200);
   };
   $$('[data-budget]', main).forEach(r => {
     r.oninput = () => {
-      $('[data-val]', r.closest('.budget-riga')).textContent = Number(r.value) ? euro0.format(Number(r.value)) : '—';
-      const c = (dati.categorie || []).find(x => x.nome === r.dataset.budget);
-      if (c) c.budget = Number(r.value) || null;
-      LS.set('dati', dati);
-      ricalcola();
-      clearTimeout(salvaBudgetTimer);
-      salvaBudgetTimer = setTimeout(salvaBudget, 1200);
+      const nome = r.dataset.budget, v = Number(r.value), prima = budget[nome] || 0;
+      const altre = cats.map(c => c.nome).filter(x => x !== nome && !bloccate[x]);
+      const fissi = cats.map(c => c.nome).filter(x => x !== nome && bloccate[x]).reduce((t, x) => t + (budget[x] || 0), 0);
+      const max = Math.max(0, din.totale - fissi);
+      const nuovo = Math.min(v, altre.length ? max : prima);
+      const b = Object.assign({}, budget, { [nome]: nuovo });
+      // Le altre (non bloccate) prendono la differenza in proporzione al loro peso attuale.
+      const resto = max - nuovo, pesi = altre.reduce((t, x) => t + (budget[x] || 0), 0);
+      altre.forEach(x => { b[x] = pesi > 0 ? Math.round(resto * (budget[x] || 0) / pesi) : Math.round(resto / altre.length); });
+      // Arrotondamenti: la differenza va alla categoria libera più grande, così il totale resta quello.
+      const scarto = max - nuovo - altre.reduce((t, x) => t + b[x], 0);
+      if (scarto && altre.length) { const g = altre.reduce((m, x) => (b[x] > b[m] ? x : m), altre[0]); b[g] = Math.max(0, b[g] + scarto); }
+      applica(b);
     };
   });
-  $('#sim-ent', main).oninput = ricalcola;
-  $('#sim-str', main).oninput = ricalcola;
-  ricalcola();
+  $$('[data-blocca]', main).forEach(b => {
+    b.onclick = () => { bloccate[b.dataset.blocca] = !bloccate[b.dataset.blocca]; LS.set('budgetBloccate', bloccate); vistaBudget(main); };
+  });
+  $$('[data-modo]', main).forEach(b => { b.onclick = () => { LS.set('budgetModo', b.dataset.modo); vistaBudget(main); }; });
+  $('#bud-ripristina', main).onclick = () => { LS.set('budgetBloccate', {}); applica(proporzioni(din.totale, {}, budget)); vistaBudget(main); };
+  $$('[data-risparmio]', main).forEach(b => {
+    b.onclick = () => {
+      const r = Number(b.dataset.risparmio);
+      dati.parametri = Object.assign({}, dati.parametri, { 'Risparmio programmato (%)': r });
+      LS.set('dati', dati);
+      api('parametri', { valori: { 'Risparmio programmato (%)': r } }).then(() => toast('Risparmio −' + r + '% salvato'))
+        .catch(e => toast('Non salvato (serve la rete): ' + (e.message || e)));
+      const nuovo = budgetDin(r);
+      cats.forEach(c => { c.budget = null; });
+      applica(proporzioni(nuovo.totale, bloccate, budget));
+      vistaBudget(main);
+    };
+  });
+  mostra();
+  if (daSalvare) applica(budget);
 }
 
 /** Invia tutti i budget allo script (colonna "Budget mensile (€)" di Categorie). Senza rete riprova alla prossima modifica. */
 async function salvaBudget() {
   const b = {};
-  (dati.categorie || []).forEach(c => { if ((c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE) b[c.nome] = n(c.budget) || 0; });
+  catBudget().forEach(c => { b[c.nome] = n(c.budget) || 0; });
   try {
     await api('budget', { budget: b });
     toast('Budget salvato');
@@ -703,6 +791,132 @@ async function salvaBudget() {
   } catch (e) {
     toast('Budget non salvato (serve la rete): ' + (e.message || e));
   }
+}
+
+// Bollette dai movimenti (SPEC v6 §E) ────────────────────────────
+
+const COLORI_GRUPPI = ['#f2c14e', '#e8825a', '#ef9b6b', '#4f8fe6', '#9b7fe8', '#5fd3b0', '#6eb8e8', '#d8c060', '#e07a6a'];
+
+function vistaBollette(main, query) {
+  const casa = dati.casa || {};
+  const gruppi = casa.gruppi || [];
+  if (!gruppi.length) {
+    main.innerHTML = `<div class="testata"><h1>Bollette</h1></div>${schedeFinanze('bollette')}
+      <div class="carta piccolo">Le bollette si ricavano dai Movimenti: compaiono quando lo script del foglio è alla versione 6.</div>`;
+    return;
+  }
+  const scelto = (query && query.get('gruppo')) || (casa.avviso && casa.avviso.gruppo) || gruppi[0].nome;
+  const g = gruppi.find(x => x.nome === scelto) || gruppi[0];
+  const ig = gruppi.indexOf(g);
+  const varTot = casa.totalePrec > 0 ? (casa.totale - casa.totalePrec) / casa.totalePrec : null;
+  const varTxt = v => v == null ? '<span class="piccolo">—</span>' : `<span class="${v > 0 ? 'testo-giallo' : 'testo-verde'}">${v > 0 ? '+' : ''}${v}%</span>`;
+  const ctr = (casa.controllo || []).filter(c => !c.errore && [g.nome].concat(g.parole || []).some(p => normalizza(p).indexOf(normalizza(c.fornitore)) >= 0));
+  const mesi = casa.mesi || [];
+  const lettere = mesi.slice(12).map(m => daChiave(m + '-01').toLocaleDateString('it-IT', { month: 'narrow' }));
+
+  main.innerHTML = `
+    <div class="testata"><h1>Bollette</h1><span class="piccolo">ultimi 12 mesi</span></div>
+    ${schedeFinanze('bollette')}
+    <div class="carta">
+      <div class="etichetta">Totale utenze · ${euro0.format(casa.totale)}</div>
+      <p class="piccolo" style="margin:0 0 6px">vs 12 mesi prima ${varTot == null ? '—' : varTxt(Math.round(varTot * 100))} · dai movimenti, niente da inserire</p>
+      <ul class="elenco gruppi">${gruppi.map((x, i) => `<li class="toccabile ${x === g ? 'selezionato' : ''}" data-gruppo="${esc(x.nome)}">
+        <span class="quadratino" style="background:${COLORI_GRUPPI[i % COLORI_GRUPPI.length]}"></span>
+        <div class="corpo">${esc(x.nome)}<div class="sotto">${esc(x.frequenza || '')}${x.quota != null ? ' · ' + x.quota + '%' : ''}</div></div>
+        <div class="num">${euro0.format(x.totale)} ${varTxt(x.variazione)}</div></li>`).join('')}</ul>
+    </div>
+    <div class="carta" style="margin-top:12px">
+      <div class="etichetta">${esc(g.nome)} · mese per mese</div>
+      <p class="piccolo" style="margin:0"><span class="quadratino" style="background:${COLORI_GRUPPI[ig % COLORI_GRUPPI.length]}"></span> quest'anno
+        <span class="quadratino" style="background:#5a6b8c"></span> anno prima · tocca un gruppo sopra</p>
+      ${graficoBollette(g.mesi || [], lettere, COLORI_GRUPPI[ig % COLORI_GRUPPI.length])}
+      <div class="budget-testa"><span>Ultima bolletta</span><strong class="num ${g.scarto >= 20 ? 'testo-giallo' : ''}">${g.ultima ? euro0.format(g.ultima.importo) + ' · ' + dataBreve(g.ultima.data) : '—'}${g.scarto != null ? ' · ' + (g.scarto > 0 ? '+' : '') + g.scarto + '% vs media' : ''}</strong></div>
+      <div class="budget-testa"><span>Media per bolletta</span><strong class="num">${g.media != null ? euro0.format(g.media) : '—'}</strong></div>
+      <div class="budget-testa"><span>Frequenza · prossima</span><strong>${esc(g.frequenza || '—')}${g.prossima ? ' · ~' + dataBreve(g.prossima) : ''}</strong></div>
+      <div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
+        : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>
+    </div>
+    <p class="piccolo">Gruppi e parole chiave: parametro "Gruppi bollette" nel foglio. Ogni gruppo somma i movimenti del mese (es. le due ricariche Iliad).</p>`;
+  $$('[data-gruppo]', main).forEach(li => { li.onclick = () => { location.hash = '#/bollette?gruppo=' + encodeURIComponent(li.dataset.gruppo); }; });
+}
+
+/** Barre mese per mese: ultimi 12 mesi (colore) accanto agli stessi mesi dell'anno prima (grigio). */
+function graficoBollette(mesi, lettere, colore) {
+  const W = 360, H = 150, b = 20, max = Math.max(1, ...mesi);
+  const w = (W - 4) / 12;
+  let s = '';
+  for (let i = 0; i < 12; i++) {
+    const prima = mesi[i] || 0, ora = mesi[i + 12] || 0, x = 2 + i * w;
+    const h1 = (H - b - 6) * prima / max, h2 = (H - b - 6) * ora / max;
+    s += `<rect x="${x + w * 0.12}" y="${H - b - h1}" width="${w * 0.36}" height="${h1}" rx="2" fill="#5a6b8c"/>`;
+    s += `<rect x="${x + w * 0.5}" y="${H - b - h2}" width="${w * 0.36}" height="${h2}" rx="2" fill="${colore}"/>`;
+    s += `<text x="${x + w / 2}" y="${H - 5}" text-anchor="middle" font-size="11" fill="#9aa0a6">${esc(lettere[i] || '')}</text>`;
+  }
+  return `<svg class="grafico-bollette" viewBox="0 0 ${W} ${H}" role="img" aria-label="Importi mese per mese">${s}</svg>`;
+}
+
+// Mutuo (SPEC v6 §F3) ────────────────────────────
+
+const PARAMETRI_MUTUO = [['Mutuo rata (€)', 'Rata (€)', 'number'], ['Mutuo prima rata', 'Prima rata', 'date'], ['Mutuo rate totali', 'Rate totali', 'number'],
+  ['Mutuo capitale iniziale (€)', 'Capitale iniziale (€)', 'number'], ['Mutuo tasso annuo (%)', 'Tasso annuo (%)', 'number']];
+
+/** Valore di un parametro per un campo: le date (anche ISO da JSON) diventano yyyy-mm-dd. */
+function valoreCampo(v, tipo) {
+  if (v == null) return '';
+  if (tipo === 'date') {
+    const s = String(v);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return chiave(new Date(s));
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    return m ? m[3] + '-' + pad(m[2]) + '-' + pad(m[1]) : s.slice(0, 10);
+  }
+  return String(v);
+}
+
+function vistaMutuo(main) {
+  const mu = dati.casa && dati.casa.mutuo;
+  const quota = mu && mu.totali ? mu.pagate / mu.totali : null;
+  let fine = '';
+  const prima = valoreCampo(par('Mutuo prima rata'), 'date');
+  if (prima && mu && mu.totali) {
+    const d = daChiave(prima);
+    fine = new Date(d.getFullYear(), d.getMonth() + mu.totali - 1, 1).toLocaleDateString('it-IT', { month: 'short', year: 'numeric' });
+  }
+  main.innerHTML = `
+    <div class="testata"><h1>Mutuo</h1><span class="piccolo">si salva nel foglio</span></div>
+    ${schedeFinanze('mutuo')}
+    <div class="carta">
+      <div class="etichetta">Situazione</div>
+      ${mu ? `<div class="griglia-3">
+        <div><div class="piccolo">rata</div><div class="grande num">${euro0.format(mu.rata)}</div></div>
+        <div><div class="piccolo">pagate</div><div class="grande num">${mu.pagate}${mu.totali ? '/' + mu.totali : ''}</div></div>
+        <div><div class="piccolo">residuo</div><div class="grande num">${mu.residuo != null ? '~' + euro0.format(mu.residuo) : '—'}</div></div></div>
+        ${quota != null ? `<div class="barra-mutuo"><span style="width:${Math.round(quota * 100)}%"></span></div>
+        <p class="piccolo">${pct.format(quota)} pagato${fine ? ' · fine prevista ' + fine : ''}${mu.prossima ? ' · prossima rata ' + dataBreve(mu.prossima) : ''}</p>` : ''}
+        ${mu.residuo == null ? '<p class="piccolo">Residuo stimato non disponibile: servono capitale iniziale e tasso annuo.</p>' : ''}`
+        : '<p class="piccolo">Compila rata (o capitale + tasso + rate totali) e prima rata qui sotto.</p>'}
+    </div>
+    <div class="carta" style="margin-top:12px">
+      <div class="etichetta">Parametri (modificabili)</div>
+      ${PARAMETRI_MUTUO.map(p => `<label class="campo-riga">${p[1]}<input type="${p[2] === 'date' ? 'date' : 'text'}" ${p[2] === 'number' ? 'inputmode="decimal"' : ''}
+        data-par="${esc(p[0])}" value="${esc(valoreCampo(par(p[0]), p[2]))}" placeholder="—"></label>`).join('')}
+      <p class="piccolo">Vuoti capitale o tasso = residuo stimato non disponibile. Tasso: es. 2,5 per 2,5%.</p>
+    </div>`;
+  $$('[data-par]', main).forEach(inp => {
+    inp.onchange = async () => {
+      const nome = inp.dataset.par, v = inp.value;
+      dati.parametri = Object.assign({}, dati.parametri, { [nome]: v });
+      LS.set('dati', dati);
+      try {
+        const r = await api('parametri', { valori: { [nome]: v } });
+        if (r.mutuo !== undefined) { dati.casa = Object.assign({}, dati.casa, { mutuo: r.mutuo }); LS.set('dati', dati); }
+        toast('Salvato: ' + nome);
+        if (tablet) tablet.aggiornaWidget();
+        vistaMutuo(main);
+      } catch (e) {
+        toast('Non salvato (serve la rete): ' + (e.message || e));
+      }
+    };
+  });
 }
 
 // Da assegnare (movimenti importati dalla banca senza categoria sicura) ────────────────────────────
@@ -763,78 +977,6 @@ function collegaDaAssegnare(main) {
 
 // Casa (mutuo dai Parametri, bollette dalla scheda Bollette) ────────────────────────────
 
-const TIPI_BOLLETTA = { Luce: 'kWh', Gas: 'Smc', Acqua: 'm³', Altro: '' };
-
-function sezioneCasa() {
-  // La scheda Bollette esiste dallo script v3 (che manda anche "casa"): prima non si può scrivere.
-  if (!dati.casa) return '<h2>Casa</h2><div class="carta piccolo">Mutuo e bollette compaiono quando lo script del foglio è alla versione 3.</div>';
-  const mu = dati.casa.mutuo;
-  const bollette = righe('Bollette').filter(b => b.Data).sort((a, b) => (a.Data < b.Data ? 1 : -1));
-  // Importi per mese (ultimi 6 mesi, per data della bolletta) e tipo.
-  const oggi = new Date(), mesi = [];
-  for (let i = 5; i >= 0; i--) mesi.push(chiave(new Date(oggi.getFullYear(), oggi.getMonth() - i, 1)).slice(0, 7));
-  const tipi = Object.keys(TIPI_BOLLETTA).filter(t => bollette.some(b => b.Tipo === t));
-  const importo = (mese, tipo) => bollette.filter(b => b.Data.slice(0, 7) === mese && (!tipo || b.Tipo === tipo)).reduce((s, b) => s + n(b['Importo (€)']), 0);
-  const nomeMese = k => daChiave(k + '-01').toLocaleDateString('it-IT', { month: 'short', year: '2-digit' });
-  const alGiorno = b => {
-    if (!b['Periodo dal'] || !b['Periodo al'] || b.Consumo === '' || b.Consumo == null) return '—';
-    const g = giorniTra(b['Periodo dal'], b['Periodo al']) + 1;
-    return g > 0 ? num1.format(n(b.Consumo) / g) + ' ' + esc(b['Unità'] || TIPI_BOLLETTA[b.Tipo] || '') + '/g' : '—';
-  };
-  return `
-    <h2>Casa</h2>
-    <div class="griglia">
-      <div class="carta"><div class="etichetta">Mutuo</div>
-        ${mu ? `<div class="grande num">${euro.format(mu.rata)}</div>
-        <div class="riga2">${mu.prossima ? 'prossima rata ' + dataBreve(mu.prossima) + ' · ' : ''}${mu.pagate}${mu.totali ? '/' + mu.totali : ''} rate pagate</div>
-        ${mu.residuo != null ? `<div class="riga2">capitale residuo ${euro0.format(mu.residuo)}${mu.mancanti != null ? ' · mancano ' + mu.mancanti + ' rate' : ''}</div>` : ''}`
-        : '<div class="riga2">Compila nel foglio, scheda Parametri: Mutuo rata (o capitale + tasso + rate totali) e Mutuo prima rata.</div>'}</div>
-      <div class="carta"><div class="etichetta">Bollette del mese</div>
-        <div class="grande num">${euro0.format(importo(mesi[5]))}</div>
-        <div class="riga2">${tipi.map(t => esc(t) + ' ' + euro0.format(importo(mesi[5], t))).join(' · ') || 'nessuna bolletta registrata'}</div></div>
-    </div>
-    ${tipi.length ? `<div class="carta tabella-scorre"><table>
-      <thead><tr><th>Mese</th>${tipi.map(t => `<th class="n">${esc(t)}</th>`).join('')}<th class="n">Totale</th></tr></thead>
-      <tbody>${mesi.map(m => `<tr><td>${nomeMese(m)}</td>${tipi.map(t => `<td class="n">${importo(m, t) ? euro0.format(importo(m, t)) : '—'}</td>`).join('')}<td class="n">${euro0.format(importo(m))}</td></tr>`).join('')}</tbody>
-    </table></div>` : ''}
-    <h2>Nuova bolletta</h2>
-    <form class="modulo carta" id="f-bol">
-      <label class="campo">Tipo<select name="tipo">${Object.keys(TIPI_BOLLETTA).map(t => `<option>${t}</option>`).join('')}</select></label>
-      <label class="campo">Importo (€)<input name="importo" type="number" step="0.01" min="0" inputmode="decimal" required></label>
-      <label class="campo">Data<input name="data" type="date" value="${oggiK()}" required></label>
-      <label class="campo">Periodo dal<input name="dal" type="date"></label>
-      <label class="campo">Periodo al<input name="al" type="date"></label>
-      <label class="campo">Consumo<input name="consumo" type="number" step="0.01" min="0" inputmode="decimal" placeholder="kWh / Smc / m³"></label>
-      <label class="campo"><span><input name="pagata" type="checkbox"> Pagata</span></label>
-      <button class="primario" type="submit">Aggiungi</button>
-    </form>
-    ${bollette.length ? `<ul class="elenco carta">${bollette.slice(0, 12).map(b => `<li>
-      <div class="corpo"><div>${esc(b.Tipo || 'Bolletta')} · ${euro.format(n(b['Importo (€)']))}${b.Pagata === true ? '' : ' <span class="testo-giallo">da pagare</span>'}</div>
-      <div class="sotto">${dataBreve(b.Data)}${b['Periodo dal'] ? ' · dal ' + dataBreve(b['Periodo dal']) + ' al ' + dataBreve(b['Periodo al']) : ''}${b.Consumo !== '' && b.Consumo != null ? ' · ' + esc(b.Consumo) + ' ' + esc(b['Unità'] || TIPI_BOLLETTA[b.Tipo] || '') + ' (' + alGiorno(b) + ')' : ''}</div></div>
-      ${b.Pagata === true ? '' : `<button class="piccolo-b" data-pagata="${esc(b.ID)}">Pagata</button>`}
-      <button class="piccolo-b" data-elimina-bol="${esc(b.ID)}" title="Elimina">✕</button></li>`).join('')}</ul>` : ''}`;
-}
-
-function collegaCasa(main) {
-  const f = $('#f-bol', main);
-  if (!f) return;
-  f.onsubmit = e => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const tipo = fd.get('tipo');
-    salva('Bollette', {
-      'Data': fd.get('data'), 'Tipo': tipo, 'Importo (€)': n(fd.get('importo')),
-      'Periodo dal': fd.get('dal') || '', 'Periodo al': fd.get('al') || '', 'Consumo': fd.get('consumo') || '',
-      'Unità': TIPI_BOLLETTA[tipo] || '', 'Pagata': fd.get('pagata') === 'on',
-    });
-    toast('Bolletta aggiunta');
-    disegna();
-  };
-  $$('[data-pagata]', main).forEach(b => { b.onclick = () => { salva('Bollette', { 'Pagata': true }, b.dataset.pagata); disegna(); }; });
-  $$('[data-elimina-bol]', main).forEach(b => {
-    b.onclick = () => { if (confirm('Eliminare questa bolletta?')) { elimina('Bollette', b.dataset.eliminaBol); disegna(); } };
-  });
-}
 
 function categorizzaLocale(descr) {
   const d = String(descr || '').toLowerCase();
@@ -914,6 +1056,8 @@ function vistaScadenze(main, query) {
       disegna();
     };
   });
+  // Dal tasto ＋ della striscia "Prossima scadenza" sul tablet: #/scadenze?nuova=1.
+  if (query && query.get('nuova')) setTimeout(() => { const f = $('#f-scad', main); f.scrollIntoView(); const i = $('input', f); if (i) i.focus(); }, 0);
 }
 
 // Spesa ────────────────────────────
