@@ -173,3 +173,55 @@ body.quaderno-aperto { overflow: hidden; }
 .barra-mutuo { height: 10px; border-radius: 6px; background: var(--superficie-2); margin: 14px 0 6px; overflow: hidden; }
 .barra-mutuo span { display: block; height: 100%; background: var(--verde); border-radius: 6px; }
 .budget-testa { gap: 10px; align-items: baseline; padding: 4px 0; }
+
+/* v7: barra in basso (Finanze · Cibo · Allenam. · Scadenze · Spesa · ⚙), Cibo e Allenamento */
+.barra .sezioni { position: fixed; left: 0; right: 0; bottom: 0; z-index: 7; justify-content: space-around; gap: 0;
+  background: rgba(17, 20, 24, .97); border-top: 1px solid var(--bordo); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
+.barra .sezioni a { font-size: 14px; padding: 8px 6px; border-radius: 10px; flex: 1; text-align: center; }
+.barra .sezioni a.attiva { background: none; color: var(--accento); font-weight: 600; }
+.barra .sezioni a.attiva::before { content: '● '; font-size: 9px; vertical-align: middle; }
+body.incorporata .barra .sezioni { display: flex; }
+main { padding-bottom: 120px; }
+.penna { bottom: 76px; }
+.avviso-toast { bottom: 80px; }
+.barra-sel { bottom: 72px; }
+.nascosto { display: none; }
+.testo-accento { color: var(--accento); }
+.riga-anello { display: flex; gap: 16px; align-items: center; }
+.anello { width: 120px; height: 120px; flex: none; }
+.corpo-anello { flex: 1; min-width: 0; }
+.macro-riga { margin-top: 4px; font-size: 14px; }
+.barra-mutuo.sottile { height: 6px; margin: 2px 0 0; }
+.riga-aggiungi { display: flex; gap: 8px; margin: 6px 0; }
+.riga-aggiungi input { flex: 1; min-width: 0; }
+.griglia-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.griglia-4 input { width: 100%; }
+.pasto-gruppo { padding: 8px 0; border-bottom: 1px solid var(--bordo); }
+.pasto-riga { font-size: 15px; color: var(--testo-2); padding: 2px 0 2px 10px; }
+.settimana-tipo { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; text-align: center; margin: 10px 0 4px; }
+.giorno-tipo { min-height: 40px; width: 100%; padding: 0; font-weight: 700; }
+.giorno-tipo.tipo-A { color: var(--accento); border-color: var(--accento); }
+.giorno-tipo.tipo-L { color: var(--giallo); border-color: var(--giallo); }
+.barra-macro { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
+.calendario { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin: 12px 0 6px; }
+.calendario .cal { display: flex; align-items: center; justify-content: center; min-height: 34px; border-radius: 8px; border: 1px solid var(--bordo);
+  color: var(--testo-2); font-size: 14px; }
+.calendario.sette .cal { min-height: 22px; }
+.calendario .cal.nel { background: rgba(129, 201, 149, .35); color: var(--testo); border-color: var(--verde); }
+.calendario .cal.sopra { background: rgba(253, 214, 99, .3); color: var(--testo); border-color: var(--giallo); }
+.calendario .cal.sotto { background: rgba(138, 180, 248, .3); color: var(--testo); border-color: var(--accento); }
+.calendario .cal.oggi { outline: 2px solid var(--testo); }
+.serie-riga { display: flex; gap: 8px; margin: 6px 0; }
+.serie { flex: 1; flex-direction: column; min-height: 58px; gap: 2px; }
+.serie.prossima { border-color: var(--accento); background: rgba(138, 180, 248, .12); }
+.serie.fatta { opacity: .75; }
+.timer-carta { text-align: center; border-color: var(--giallo); }
+.timer-cifre { font-size: 64px; font-weight: 800; line-height: 1.1; }
+.timer-carta.lampeggia { animation: lampeggia .5s 6 alternate; }
+@keyframes lampeggia { from { background: var(--superficie); } to { background: rgba(129, 201, 149, .35); } }
+.maniglia { cursor: grab; font-size: 20px; padding: 0 6px; touch-action: none; user-select: none; }
+li.trascinato { background: rgba(138, 180, 248, .15); }
+input.corto, select.corto { width: 52px; min-height: 38px; padding: 4px 6px; text-align: center; }
+@media (max-width: 600px) { .elenco li input.corto { width: 44px; } }
+#sch-lista li { flex-wrap: wrap; gap: 6px 10px; }
+#sch-lista .controlli { display: flex; gap: 6px; align-items: center; width: 100%; padding-left: 30px; color: var(--testo-2); }

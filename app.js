@@ -25,7 +25,7 @@ let dati = LS.get('dati', null);
 let coda = LS.get('coda', []);
 let statoSync = { stato: 'idle', ultimo: LS.get('ultimoSync', null), errore: '' };
 
-const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette'];
+const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti'];
 
 function datiVuoti() {
   const schede = {};
@@ -326,7 +326,8 @@ function pastiOggi() {
 
 const VISTE = {
   '': vistaHome, finanze: vistaFinanze, movimenti: vistaMovimenti, budget: vistaBudget, bollette: vistaBollette, mutuo: vistaMutuo, scadenze: vistaScadenze, spesa: vistaSpesa,
-  allenamento: vistaAllenamento, dieta: vistaDieta, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
+  allenamento: vistaAllenamento, scheda: vistaScheda, progressi: vistaProgressi,
+  cibo: vistaCibo, dieta: vistaCibo, piano: vistaPiano, controlli: vistaControlli, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
 };
 
 function percorso() {
@@ -340,7 +341,7 @@ function disegna() {
   if (p.nome === 'quaderno') { apriQuaderno(p.query.get('dest') || 'Nessuna'); return; }
   chiudiQuadernoSeAperto();
   const vista = VISTE[p.nome] || vistaHome;
-  $$('#nav a').forEach(a => a.classList.toggle('attiva', a.getAttribute('href') === '#/' + (SCHEDE_FINANZE.some(s => s[0] === p.nome) ? 'finanze' : p.nome)));
+  $$('#nav a').forEach(a => a.classList.toggle('attiva', a.getAttribute('href') === '#/' + gruppoNav(p.nome)));
   const main = $('#vista');
   if (!config.url || !config.token) { vistaImpostazioni(main, true); return; }
   vista(main, p.query);
@@ -1100,70 +1101,616 @@ function vistaSpesa(main) {
 
 // Allenamento ────────────────────────────
 
-function vistaAllenamento(main, query) {
-  const a = calcAllenamento();
-  const oggi = oggiK();
-  const giornoScelto = query.get('giorno') || GIORNI[new Date().getDay()];
-  const esercizi = righe('Scheda').filter(e => normalizza(e.Giorno) === normalizza(giornoScelto))
-    .sort((x, y) => n(x.Ordine) - n(y.Ordine));
-  const logOggi = righe('Log').filter(l => l.Data === oggi);
+// ───────────────────────── Allenamento (SPEC v7 §E, mockup 24) ─────────────────────────
+// Oggi: esercizi del giorno, serie da segnare (una riga di Log per serie: Serie = 1, Note "serie N"), timer di recupero.
+// Scheda: dati della scheda (Parametri) e settimana tipo; esercizi per giorno nella scheda "Scheda" (Ordine = posizione).
+// Progressi: costanza, volume settimanale, carico per esercizio, esercizi fermi.
+
+const SCHEDE_ALL = [['allenamento', 'Oggi'], ['scheda', 'Scheda'], ['progressi', 'Progressi']];
+const FINITO_WEB = 'Allenamento completato';
+
+function schedeAll(attiva) {
+  return `<nav class="schede-fin">${SCHEDE_ALL.map(s => `<a href="#/${s[0]}" class="${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`).join('')}</nav>`;
+}
+
+function eserciziDel(giorno) {
+  return righe('Scheda').filter(e => normalizza(e.Giorno) === normalizza(giorno) && String(e.Esercizio || '').trim())
+    .sort((a, b) => n(a.Ordine) - n(b.Ordine));
+}
+function logDel(k, esercizio) {
+  return righe('Log').filter(l => l.Data === k && (!esercizio || normalizza(l.Esercizio) === normalizza(esercizio)));
+}
+/** Serie fatte oggi per un esercizio: righe di Log con il loro "Serie" (le righe del tablet valgono tutte le serie). */
+function serieFatte(k, esercizio) { return logDel(k, esercizio).reduce((s, l) => s + Math.max(1, n(l.Serie)), 0); }
+function oggiGiorno() { return SETTIMANA[(new Date().getDay() + 6) % 7]; }
+
+// Timer di recupero della web app (anche con lo schermo del tablet acceso: la pagina resta aperta).
+const timerWeb = { fine: 0, durata: n(LS.get('recuperoWeb', 0)) || 0, pausa: -1, id: null };
+
+function avviaTimer(sec) {
+  timerWeb.durata = sec;
+  timerWeb.fine = Date.now() + sec * 1000;
+  timerWeb.pausa = -1;
+  LS.set('recuperoWeb', sec);
+  tickTimer();
+}
+function tickTimer() {
+  clearInterval(timerWeb.id);
+  timerWeb.id = setInterval(() => {
+    const el = $('#timer-cifre');
+    if (!el) { if (Date.now() > timerWeb.fine) clearInterval(timerWeb.id); return; }
+    const resto = timerWeb.pausa >= 0 ? timerWeb.pausa : Math.max(0, timerWeb.fine - Date.now());
+    const s = Math.ceil(resto / 1000);
+    el.textContent = Math.floor(s / 60) + ':' + pad(s % 60);
+    const b = $('#timer-barra');
+    if (b) b.style.width = (timerWeb.durata ? Math.min(100, resto / (timerWeb.durata * 1000) * 100) : 0) + '%';
+    if (resto === 0 && timerWeb.pausa < 0 && timerWeb.fine) {
+      timerWeb.fine = 0;
+      el.textContent = 'VIA!';
+      $('#timer-carta') && $('#timer-carta').classList.add('lampeggia');
+      try { navigator.vibrate && navigator.vibrate([400, 200, 400]); } catch (e) { /* niente vibrazione */ }
+    }
+  }, 200);
+}
+
+function vistaAllenamento(main) {
+  const k = oggiK(), giorno = oggiGiorno(), es = eserciziDel(giorno);
+  const nomeScheda = par('Nome scheda') || '', rec = numPar('Recupero (s)', 90);
+  if (!timerWeb.durata) timerWeb.durata = rec;
+  const inizio = valoreCampo(par('Inizio scheda'), 'date'), settimane = numPar('Settimane scheda', 0);
+  const settN = inizio ? Math.floor(giorniTra(inizio, k) / 7) + 1 : 0;
+  const fatti = es.filter(e => serieFatte(k, e.Esercizio) >= Math.max(1, n(e.Serie)));
+  const corrente = es.find(e => serieFatte(k, e.Esercizio) < Math.max(1, n(e.Serie)));
+  const finito = logDel(k, FINITO_WEB).length > 0;
+  const gruppo = es.length ? (es[0].Allenamento || '') : '';
   const ultimoKg = nome => {
-    const l = righe('Log').filter(x => normalizza(x.Esercizio) === normalizza(nome) && x['Peso (kg)'] !== '' && x['Peso (kg)'] != null)
-      .sort((x, y) => (x.Data < y.Data ? 1 : -1))[0];
-    return l ? l['Peso (kg)'] : '';
+    const l = righe('Log').filter(x => normalizza(x.Esercizio) === normalizza(nome) && n(x['Peso (kg)']) > 0).sort((a, b) => (a.Data < b.Data ? 1 : -1))[0];
+    return l ? n(l['Peso (kg)']) : 0;
   };
-  const giorniConScheda = GIORNI.filter(g => righe('Scheda').some(e => normalizza(e.Giorno) === normalizza(g)));
+
+  let serieHtml = '';
+  if (corrente) {
+    const tot = Math.max(1, n(corrente.Serie)), fatte = logDel(k, corrente.Esercizio);
+    const celle = [];
+    for (let i = 0; i < tot; i++) {
+      const l = fatte[i];
+      celle.push(`<button type="button" class="serie ${l ? 'fatta' : i === fatte.length ? 'prossima' : ''}" data-serie="${i}">
+        <span class="piccolo">serie ${i + 1}</span><strong>${l ? esc(l.Ripetizioni) + ' × ' + esc(l['Peso (kg)'] || '—') : '— × ' + (ultimoKg(corrente.Esercizio) || n(corrente['Peso previsto (kg)']) || '—')}</strong></button>`);
+    }
+    serieHtml = `<div class="carta" style="margin-top:12px"><div class="etichetta">${esc(corrente.Esercizio)} · in corso</div>
+      <div class="serie-riga">${celle.join('')}</div><p class="piccolo">tocca una serie per segnare ripetizioni e kg fatti</p></div>`;
+  }
 
   main.innerHTML = `
-    <h1>Allenamento</h1>
-    <div class="griglia">
-      <div class="carta"><div class="etichetta">Oggi</div><div class="grande">${esc(a.stato)}</div></div>
-      <div class="carta"><div class="etichetta">Questa settimana</div><div class="grande num">${a.settimana}${a.obiettivo ? ' / ' + a.obiettivo : ''}</div></div>
-    </div>
-    <h2>Scheda di ${esc(giornoScelto.toLowerCase())}</h2>
-    <div class="azioni">${GIORNI.slice(1).concat(GIORNI[0]).map(g => `<a class="bottone ${normalizza(g) === normalizza(giornoScelto) ? 'primario' : ''}" href="#/allenamento?giorno=${encodeURIComponent(g)}">${g.slice(0, 3)}${giorniConScheda.indexOf(g) >= 0 ? ' •' : ''}</a>`).join('')}</div>
-    <ul class="elenco carta">${esercizi.length ? esercizi.map(e => {
-      const fatto = logOggi.some(l => normalizza(l.Esercizio) === normalizza(e.Esercizio));
-      const kg = ultimoKg(e.Esercizio) || e['Peso previsto (kg)'] || '';
-      return `<li class="${fatto ? 'fatto' : ''}">
-        <div class="corpo"><div>${esc(e.Esercizio)}</div><div class="sotto">${esc(e.Serie)} × ${esc(e.Ripetizioni)}${e.Note ? ' · ' + esc(e.Note) : ''}</div></div>
-        <label class="campo">kg<input type="number" step="0.5" min="0" inputmode="decimal" value="${esc(kg)}" data-kg="${esc(e.ID)}" style="width:90px"></label>
-        <button class="${fatto ? '' : 'primario'}" data-fatto="${esc(e.ID)}">${fatto ? 'Ancora' : 'Fatto'}</button></li>`;
-    }).join('') : '<li class="vuoto">Nessun esercizio per questo giorno.</li>'}</ul>
+    <div class="testata"><h1>Allenamento</h1><span class="piccolo">${dataBreve(k)}</span></div>
+    ${schedeAll('allenamento')}
+    <div class="carta"><div class="etichetta">Oggi${gruppo ? ' · ' + esc(gruppo) : es.length ? '' : ' · riposo'}</div>
+      ${nomeScheda || settN ? `<p class="piccolo" style="margin:0 0 4px">${nomeScheda ? 'scheda "' + esc(nomeScheda) + '"' : ''}${settN > 0 ? ' · settimana ' + settN + (settimane ? ' di ' + settimane : '') : ''}${es.length ? ' · ' + fatti.length + ' di ' + es.length + ' fatti' : ''}</p>` : ''}
+      <ul class="elenco">${es.length ? es.map(e => {
+        const s = serieFatte(k, e.Esercizio), tot = Math.max(1, n(e.Serie)), ok = s >= tot;
+        return `<li class="${ok ? 'fatto' : ''}"><input type="checkbox" data-spunta="${esc(e.ID)}" ${ok ? 'checked' : ''} aria-label="Fatto">
+          <div class="corpo">${esc(e.Esercizio)}${s && !ok ? ' <span class="piccolo">' + s + '/' + tot + '</span>' : ''}</div>
+          <div class="num piccolo">${esc(e.Serie)}×${esc(e.Ripetizioni)}${e['Unità'] && e['Unità'] !== 'rip' ? ' ' + esc(e['Unità']) : ''} <strong>${n(e['Peso previsto (kg)']) ? esc(e['Peso previsto (kg)']) + ' kg' : ''}</strong></div></li>`;
+      }).join('') : `<li class="vuoto">${righe('Scheda').some(e => String(e.Esercizio || '').trim()) ? 'Oggi riposo.' : 'Nessuna scheda: creala in <a href="#/scheda">Scheda</a>.'}</li>`}</ul></div>
+    ${serieHtml}
+    <div class="carta timer-carta" id="timer-carta" style="margin-top:12px">
+      <div class="etichetta testo-giallo" style="justify-content:center">Recupero</div>
+      <div class="timer-cifre num" id="timer-cifre">${Math.floor(timerWeb.durata / 60)}:${pad(timerWeb.durata % 60)}</div>
+      <div class="barra-mutuo"><span id="timer-barra" style="width:0;background:var(--giallo)"></span></div>
+      <div class="chips" style="justify-content:center">${[60, 90, 120].map(s => `<button type="button" class="chip ${s === timerWeb.durata ? 'attivo' : ''}" data-t="${s}">${s}</button>`).join('')}
+        <button type="button" class="chip" data-piu="-15">−15 s</button><button type="button" class="chip" data-piu="15">+15 s</button>
+        <button type="button" class="chip" id="t-pausa">❚❚</button></div>
+      <p class="piccolo" style="text-align:center">parte da solo quando segni una serie · vibra alla fine</p></div>
+    <div class="azioni" style="justify-content:center">
+      <button class="primario" type="button" id="all-finito">${finito ? 'Allenamento finito ✓' : 'Allenamento finito'}</button>
+      <button type="button" id="all-timer">⏱ solo timer</button></div>`;
 
-    <h2>Aggiungi un esercizio alla scheda</h2>
-    <form class="modulo carta" id="f-es">
-      <label class="campo">Giorno<select name="giorno">${GIORNI.slice(1).concat(GIORNI[0]).map(g => `<option ${g === giornoScelto ? 'selected' : ''}>${g}</option>`).join('')}</select></label>
-      <label class="campo largo">Esercizio<input name="esercizio" required></label>
-      <label class="campo">Serie<input name="serie" type="number" min="1" value="3"></label>
-      <label class="campo">Ripetizioni<input name="rip" type="number" min="1" value="10"></label>
-      <label class="campo">kg previsti<input name="kg" type="number" step="0.5" min="0"></label>
-      <button class="primario" type="submit">Aggiungi</button>
-    </form>
-    ${bottonePenna('Log')}`;
-
-  $$('[data-fatto]', main).forEach(b => {
-    b.onclick = () => {
-      const e = esercizi.find(x => x.ID === b.dataset.fatto);
-      salva('Log', {
-        'Data': oggi, 'Esercizio': e.Esercizio, 'Serie': e.Serie, 'Ripetizioni': e.Ripetizioni,
-        'Peso (kg)': $('[data-kg="' + e.ID + '"]', main).value,
-      });
-      toast(e.Esercizio + ': registrato');
-      disegna();
+  tickTimer();
+  $$('[data-t]', main).forEach(b => { b.onclick = () => { avviaTimer(Number(b.dataset.t)); vistaAllenamento(main); }; });
+  $$('[data-piu]', main).forEach(b => {
+    b.onclick = () => { if (timerWeb.pausa >= 0) timerWeb.pausa = Math.max(0, timerWeb.pausa + Number(b.dataset.piu) * 1000); else timerWeb.fine = Math.max(Date.now() + 1000, timerWeb.fine + Number(b.dataset.piu) * 1000); };
+  });
+  $('#t-pausa', main).onclick = () => {
+    if (timerWeb.pausa >= 0) { timerWeb.fine = Date.now() + timerWeb.pausa; timerWeb.pausa = -1; } else { timerWeb.pausa = Math.max(0, timerWeb.fine - Date.now()); }
+  };
+  $('#all-timer', main).onclick = () => avviaTimer(timerWeb.durata || rec);
+  $('#all-finito', main).onclick = () => {
+    if (!finito) salva('Log', { 'Data': k, 'Esercizio': FINITO_WEB, 'Note': 'dalla web app' });
+    toast('Allenamento segnato come fatto');
+    vistaAllenamento(main);
+  };
+  $$('[data-spunta]', main).forEach(cb => {
+    cb.onchange = () => {
+      const e = es.find(x => x.ID === cb.dataset.spunta);
+      if (cb.checked) {
+        const resto = Math.max(1, n(e.Serie)) - serieFatte(k, e.Esercizio);
+        if (resto > 0) salva('Log', { 'Data': k, 'Esercizio': e.Esercizio, 'Serie': resto, 'Ripetizioni': e.Ripetizioni, 'Peso (kg)': e['Peso previsto (kg)'] || '' });
+      } else logDel(k, e.Esercizio).forEach(l => elimina('Log', l.ID));
+      vistaAllenamento(main);
     };
   });
-  $('#f-es').onsubmit = e => {
+  $$('[data-serie]', main).forEach(b => {
+    b.onclick = () => {
+      const i = Number(b.dataset.serie), fatte = logDel(k, corrente.Esercizio);
+      const prima = fatte[i];
+      const kg0 = prima ? prima['Peso (kg)'] : ultimoKg(corrente.Esercizio) || corrente['Peso previsto (kg)'] || '';
+      const v = prompt(corrente.Esercizio + ' · serie ' + (i + 1) + '\nripetizioni × kg (es. 8 × 40)', (prima ? prima.Ripetizioni : corrente.Ripetizioni) + ' × ' + kg0);
+      if (v == null) return;
+      const m = v.replace(',', '.').match(/(\d+)\s*[x×*]?\s*(\d+(?:\.\d+)?)?/i);
+      if (!m) return;
+      salva('Log', { 'Data': k, 'Esercizio': corrente.Esercizio, 'Serie': 1, 'Ripetizioni': Number(m[1]), 'Peso (kg)': m[2] ? Number(m[2]) : '', 'Note': 'serie ' + (i + 1) }, prima ? prima.ID : undefined);
+      if (!prima) avviaTimer(timerWeb.durata || rec);
+      vistaAllenamento(main);
+    };
+  });
+}
+
+// Scheda ────────────────────────────
+
+function vistaScheda(main, query) {
+  const giorno = query && query.get('giorno');
+  const campo = (nome, et, val, tipo) => `<label class="campo-riga">${et}<input type="${tipo || 'text'}" ${tipo ? '' : 'inputmode="decimal"'} data-par="${esc(nome)}" value="${esc(val)}" placeholder="—"></label>`;
+  const testa = `<div class="testata"><h1>Scheda</h1><span class="piccolo">${esc(par('Nome scheda') || '')}</span></div>${schedeAll('scheda')}`;
+  if (!giorno) {
+    main.innerHTML = `${testa}
+      <div class="carta"><div class="etichetta">Scheda attiva</div>
+        <label class="campo-riga">Nome<input data-par="Nome scheda" value="${esc(par('Nome scheda') || '')}" placeholder="es. Forza A"></label>
+        ${campo('Inizio scheda', 'Dal', valoreCampo(par('Inizio scheda'), 'date'), 'date')}
+        ${campo('Settimane scheda', 'Durata (settimane)', par('Settimane scheda') || '')}
+        ${campo('Allenamenti a settimana (obiettivo)', 'Obiettivo a settimana', par('Allenamenti a settimana (obiettivo)') || '')}
+        ${campo('Recupero (s)', 'Recupero di base (s)', par('Recupero (s)') || 90)}</div>
+      <div class="carta" style="margin-top:12px"><div class="etichetta">Settimana tipo</div>
+        <ul class="elenco">${SETTIMANA.map(g => {
+          const es = eserciziDel(g);
+          return `<li class="toccabile" data-vai="#/scheda?giorno=${encodeURIComponent(g)}"><strong style="width:44px">${g.slice(0, 3)}</strong>
+            <div class="corpo ${es.length ? 'testo-accento' : 'piccolo'}">${es.length ? esc(es[0].Allenamento || 'allenamento') : 'riposo'}</div>
+            <span class="piccolo">${es.length ? es.length + ' esercizi ›' : '＋'}</span></li>`;
+        }).join('')}</ul></div>`;
+    $$('[data-par]', main).forEach(i => { i.onchange = () => { salvaParametri({ [i.dataset.par]: i.value }, 'Salvato'); }; });
+    $$('[data-vai]', main).forEach(li => { li.onclick = () => { location.hash = li.dataset.vai; }; });
+    return;
+  }
+
+  const es = eserciziDel(giorno);
+  const nomeAll = es.length ? es[0].Allenamento || '' : '';
+  main.innerHTML = `${testa}
+    <a href="#/scheda" class="piccolo">‹ settimana tipo</a>
+    <div class="carta" style="margin-top:8px">
+      <div class="budget-testa"><span class="etichetta" style="margin:0">${esc(giorno)}</span><span class="piccolo">trascina ≡ per ordinare</span></div>
+      <label class="campo-riga">Allenamento<input id="sch-nome" value="${esc(nomeAll)}" placeholder="es. Petto e dorso"></label>
+      <ul class="elenco" id="sch-lista">${es.map(e => `<li data-id="${esc(e.ID)}"><span class="maniglia" aria-label="Trascina">≡</span>
+        <div class="corpo">${esc(e.Esercizio)}</div>
+        <button class="piccolo-b lucchetto" data-togli="${esc(e.ID)}" aria-label="Togli">✕</button>
+        <span class="controlli"><input class="corto" data-campo="Serie" value="${esc(e.Serie)}" inputmode="numeric" aria-label="Serie">×
+        <input class="corto" data-campo="Ripetizioni" value="${esc(e.Ripetizioni)}" inputmode="numeric" aria-label="Ripetizioni">
+        <select class="corto" data-campo="Unità" aria-label="Unità">${['rip', 's', 'min'].map(u => `<option ${String(e['Unità'] || 'rip') === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
+        <input class="corto" data-campo="Peso previsto (kg)" value="${esc(e['Peso previsto (kg)'] || '')}" inputmode="decimal" aria-label="kg" placeholder="kg"> kg</span></li>`).join('') || '<li class="vuoto">Giorno di riposo: aggiungi un esercizio.</li>'}</ul>
+      <form id="sch-nuovo" class="riga-aggiungi"><input id="sch-es" placeholder="＋ esercizio (cerca o scrivi)…" list="sch-noti" autocomplete="off">
+        <datalist id="sch-noti">${[...new Set(righe('Scheda').map(e => e.Esercizio).filter(Boolean))].map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+        <button class="primario" type="submit">Aggiungi</button></form>
+    </div>`;
+
+  $('#sch-nome', main).onchange = e => { eserciziDel(giorno).forEach(x => salva('Scheda', { 'Allenamento': e.target.value }, x.ID)); toast('Salvato'); };
+  $$('[data-campo]', main).forEach(i => { i.onchange = () => { salva('Scheda', { [i.dataset.campo]: i.value }, i.closest('li').dataset.id); toast('Salvato'); }; });
+  $$('[data-togli]', main).forEach(b => { b.onclick = () => { elimina('Scheda', b.dataset.togli); vistaScheda(main, query); }; });
+  $('#sch-nuovo', main).onsubmit = e => {
     e.preventDefault();
-    const fd = new FormData(e.target);
-    const ord = righe('Scheda').filter(x => normalizza(x.Giorno) === normalizza(fd.get('giorno'))).length + 1;
-    salva('Scheda', {
-      'Giorno': fd.get('giorno'), 'Ordine': ord, 'Esercizio': fd.get('esercizio'),
-      'Serie': fd.get('serie'), 'Ripetizioni': fd.get('rip'), 'Peso previsto (kg)': fd.get('kg'),
-    });
-    toast('Esercizio aggiunto');
-    disegna();
+    const nome = $('#sch-es', main).value.trim();
+    if (!nome) return;
+    const simile = righe('Scheda').filter(x => normalizza(x.Esercizio) === normalizza(nome)).pop();
+    salva('Scheda', { 'Giorno': giorno, 'Ordine': es.length + 1, 'Esercizio': nome, 'Allenamento': $('#sch-nome', main).value,
+      'Serie': simile ? simile.Serie : 3, 'Ripetizioni': simile ? simile.Ripetizioni : 10, 'Unità': simile ? simile['Unità'] || 'rip' : 'rip',
+      'Peso previsto (kg)': simile ? simile['Peso previsto (kg)'] || '' : '' });
+    vistaScheda(main, query);
   };
+  // Riordino trascinando la maniglia ≡ (funziona col dito: pointer events), poi Ordine = nuova posizione.
+  const lista = $('#sch-lista', main);
+  let preso = null;
+  $$('.maniglia', main).forEach(h => {
+    h.onpointerdown = ev => { preso = h.closest('li'); preso.classList.add('trascinato'); h.setPointerCapture(ev.pointerId); ev.preventDefault(); };
+    h.onpointermove = ev => {
+      if (!preso) return;
+      const sotto = $$('li[data-id]', lista).find(li => li !== preso && ev.clientY < li.getBoundingClientRect().top + li.offsetHeight / 2);
+      if (sotto) lista.insertBefore(preso, sotto); else lista.appendChild(preso);
+    };
+    h.onpointerup = () => {
+      if (!preso) return;
+      preso.classList.remove('trascinato');
+      preso = null;
+      $$('li[data-id]', lista).forEach((li, i) => { const e = es.find(x => x.ID === li.dataset.id); if (e && n(e.Ordine) !== i + 1) salva('Scheda', { 'Ordine': i + 1 }, li.dataset.id); });
+      toast('Ordine salvato');
+    };
+  });
+}
+
+// Progressi ────────────────────────────
+
+function vistaProgressi(main, query) {
+  const oggi = oggiK(), lun = spostaGiorni(oggi, -((daChiave(oggi).getDay() + 6) % 7));
+  const log = righe('Log').filter(l => l.Data && l.Esercizio);
+  const obiettivo = numPar('Allenamenti a settimana (obiettivo)', new Set(righe('Scheda').filter(e => e.Esercizio).map(e => normalizza(e.Giorno))).size || 3);
+  const giornoFatto = k => log.some(l => l.Data === k);
+  const cardio = k => log.some(l => l.Data === k && /corsa|bici|cammin|montagn|nuoto|cardio/i.test(l.Esercizio));
+  // Costanza: ultime 4 settimane.
+  let fatti = 0, pianificate = 0, eseguite = 0;
+  const celle = [];
+  for (let w = 3; w >= 0; w--) {
+    for (let d = 0; d < 7; d++) {
+      const k = spostaGiorni(lun, -7 * w + d);
+      const g = SETTIMANA[d], es = eserciziDel(g);
+      if (k <= oggi && giornoFatto(k)) { fatti++; pianificate += es.reduce((s, e) => s + Math.max(1, n(e.Serie)), 0); eseguite += log.filter(l => l.Data === k && l.Esercizio !== FINITO_WEB).reduce((s, l) => s + Math.max(1, n(l.Serie)), 0); }
+      celle.push(`<span class="cal ${k > oggi ? '' : cardio(k) ? 'nel' : giornoFatto(k) ? 'sotto' : ''}" title="${dataBreve(k)}"></span>`);
+    }
+  }
+  let fila = 0;
+  for (let w = 0; w < 52; w++) {
+    let c = 0;
+    for (let d = 0; d < 7; d++) if (giornoFatto(spostaGiorni(lun, -7 * w + d))) c++;
+    if (c >= obiettivo || (w === 0 && c > 0)) fila++; else if (w > 0) break;
+  }
+  // Volume settimanale (t): Serie × Ripetizioni × kg, ultime 8 settimane.
+  const vol = [];
+  for (let w = 7; w >= 0; w--) {
+    const da = spostaGiorni(lun, -7 * w), a = spostaGiorni(da, 6);
+    vol.push(log.filter(l => l.Data >= da && l.Data <= a).reduce((s, l) => s + Math.max(1, n(l.Serie)) * n(l.Ripetizioni) * n(l['Peso (kg)']), 0) / 1000);
+  }
+  const maxV = Math.max(0.1, ...vol);
+  // Carico per esercizio.
+  const nomi = [...new Set(log.filter(l => n(l['Peso (kg)']) > 0).map(l => l.Esercizio))].sort();
+  const scelto = (query && query.get('es')) || nomi[0] || '';
+  const perSett = [];
+  for (let w = 7; w >= 0; w--) {
+    const da = spostaGiorni(lun, -7 * w), a = spostaGiorni(da, 6);
+    const kg = log.filter(l => normalizza(l.Esercizio) === normalizza(scelto) && l.Data >= da && l.Data <= a).map(l => n(l['Peso (kg)']));
+    perSett.push(kg.length ? Math.max(...kg) : null);
+  }
+  const rec = log.filter(l => normalizza(l.Esercizio) === normalizza(scelto)).sort((a, b) => n(b['Peso (kg)']) - n(a['Peso (kg)']) || (a.Data < b.Data ? 1 : -1))[0];
+  const validi = perSett.filter(x => x != null);
+  const delta = validi.length > 1 ? validi[validi.length - 1] - validi[0] : 0;
+  // Fermo: esercizio il cui massimo non sale da almeno 3 settimane (con almeno 3 sedute).
+  let fermo = null;
+  nomi.forEach(nm => {
+    const righeEs = log.filter(l => normalizza(l.Esercizio) === normalizza(nm) && n(l['Peso (kg)']) > 0).sort((a, b) => (a.Data < b.Data ? -1 : 1));
+    if (righeEs.length < 3) return;
+    const max = Math.max(...righeEs.map(l => n(l['Peso (kg)'])));
+    const primo = righeEs.find(l => n(l['Peso (kg)']) === max);
+    const sett = Math.floor(giorniTra(primo.Data, oggi) / 7);
+    if (sett >= 3 && (!fermo || sett > fermo.sett)) fermo = { nome: nm, sett, kg: max };
+  });
+  const W = 320, H = 110;
+  const puntiKg = (() => {
+    const v = perSett.map((x, i) => ({ x, i })).filter(p => p.x != null);
+    if (!v.length) return '';
+    const mn = Math.min(...v.map(p => p.x)), mx = Math.max(...v.map(p => p.x)), r = Math.max(1, mx - mn);
+    return v.map(p => `${(p.i * W / 7).toFixed(1)},${(H - 12 - (H - 24) * (p.x - mn) / r).toFixed(1)}`).join(' ');
+  })();
+
+  main.innerHTML = `
+    <div class="testata"><h1>Progressi</h1><span class="piccolo">8 settimane</span></div>
+    ${schedeAll('progressi')}
+    <div class="carta"><div class="etichetta">Costanza · ultime 4 settimane</div>
+      <div class="griglia-3">
+        <div><div class="piccolo">allenamenti</div><div class="grande num">${fatti}<span class="piccolo">/${obiettivo * 4}</span></div></div>
+        <div><div class="piccolo">serie fatte</div><div class="grande num">${pianificate ? Math.min(100, Math.round(eseguite / pianificate * 100)) + '%' : '—'}</div></div>
+        <div><div class="piccolo">di fila</div><div class="grande num testo-verde">${fila} sett.</div></div></div>
+      <div class="calendario sette">${celle.join('')}</div>
+      <p class="piccolo"><span class="quadratino" style="background:var(--accento)"></span>palestra <span class="quadratino" style="background:var(--verde)"></span>cardio / montagna</p></div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Volume settimanale (t)</div>
+      <svg class="grafico-bollette" viewBox="0 0 ${W} ${H}" role="img" aria-label="Volume settimanale">${vol.map((v, i) =>
+        `<rect x="${i * W / 8 + 8}" y="${H - 18 - (H - 26) * v / maxV}" width="${W / 8 - 16}" height="${(H - 26) * v / maxV}" rx="3" fill="${i === 7 ? '#7fd4ff' : '#4f7fc0'}"/>
+         <text x="${i * W / 8 + W / 16}" y="${H - 4}" text-anchor="middle" font-size="10" fill="#9aa0a6">S${i + 1}</text>`).join('')}</svg></div>
+    <div class="carta" style="margin-top:12px">
+      <div class="budget-testa"><label class="etichetta" style="margin:0">Carico · <select id="pr-es" class="cat-riga">${nomi.map(x => `<option ${x === scelto ? 'selected' : ''}>${esc(x)}</option>`).join('') || '<option>—</option>'}</select></label>
+        <span class="${delta > 0 ? 'testo-verde' : 'piccolo'}">${delta ? (delta > 0 ? '+' : '') + num1.format(delta) + ' kg in 8 sett.' : ''}</span></div>
+      <svg class="grafico-bollette" viewBox="0 0 ${W} ${H}" role="img" aria-label="Carico per settimana">${puntiKg ? `<polyline points="${puntiKg}" fill="none" stroke="var(--verde)" stroke-width="2.5"/>` : '<text x="10" y="60" font-size="12" fill="#9aa0a6">nessun carico segnato</text>'}</svg>
+      <div class="budget-testa"><span>Record</span><strong>${rec ? esc(rec['Peso (kg)']) + ' kg × ' + esc(rec.Ripetizioni) + ' · ' + dataBreve(rec.Data) : '—'}</strong></div>
+      <div class="budget-testa"><span>Fermo da ${fermo ? fermo.sett + ' settimane' : '—'}</span><strong class="testo-giallo">${fermo ? esc(fermo.nome) + ' ' + num1.format(fermo.kg) + ' kg' : ''}</strong></div></div>`;
+  $('#pr-es', main).onchange = e => { location.hash = '#/progressi?es=' + encodeURIComponent(e.target.value); };
+}
+
+// ───────────────────────── Cibo (SPEC v7 §D, mockup 23) ─────────────────────────
+// Unità del piano = la SETTIMANA: ogni giorno ha un tipo A (allenamento), R (riposo), L (libero) con le sue kcal.
+// Stesse regole dello script (pianoCibo_): tipi dal parametro "Settimana tipo cibo" o, se vuoto, A nei giorni con esercizi.
+
+const SCHEDE_CIBO = [['cibo', 'Diario'], ['piano', 'Piano'], ['controlli', 'Controlli'], ['peso', 'Peso']];
+const ORDINE_PASTI = ['Colazione', 'Pranzo', 'Spuntino', 'Cena'];
+const SETTIMANA = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
+
+function schedeCibo(attiva) {
+  return `<nav class="schede-fin">${SCHEDE_CIBO.map(s => `<a href="#/${s[0]}" class="${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`).join('')}</nav>`;
+}
+
+function piano() {
+  const num = (nome, def) => { const v = n(par(nome)); return v > 0 ? v : def; };
+  const base = num('Obiettivo kcal', 2200);
+  const kcal = { A: num('Kcal giorno allenamento', base), R: num('Kcal giorno riposo', base), L: num('Kcal giorno libero', base) };
+  let tipi = String(par('Settimana tipo cibo') || '').toUpperCase().replace(/[^ARL]/g, '');
+  if (tipi.length !== 7) {
+    const g = {};
+    righe('Scheda').forEach(e => { if (String(e.Esercizio || '').trim()) g[normalizza(e.Giorno)] = true; });
+    tipi = SETTIMANA.map(x => (g[normalizza(x)] ? 'A' : 'R')).join('');
+  }
+  const p = calcPeso();
+  return {
+    obiettivo: String(par('Cibo obiettivo') || 'mantenere'), kcal, tipi,
+    settimana: tipi.split('').reduce((s, t) => s + kcal[t], 0),
+    gkg: num('Proteine (g/kg)', 1.8), grassiPct: num('Grassi (% kcal)', 27), peso: p.ultimo ? p.ultimo.kg : null,
+  };
+}
+
+function tipoDel(pi, k) { return pi.tipi.charAt((daChiave(k).getDay() + 6) % 7); }
+function obiettivoDel(pi, k) { return pi.kcal[tipoDel(pi, k)]; }
+function macroDel(pi, kcal) {
+  const p = pi.peso ? Math.round(pi.gkg * pi.peso) : numPar('Obiettivo proteine (g)', 140);
+  const g = Math.round(kcal * pi.grassiPct / 100 / 9);
+  return { p, g, c: Math.max(0, Math.round((kcal - p * 4 - g * 9) / 4)) };
+}
+const NOMI_TIPO = { A: 'allenamento', R: 'riposo', L: 'libero' };
+
+function pastiDel(k) {
+  return righe('Pasti').filter(p => p.Data === k).sort((a, b) => String(a.Ora || '').localeCompare(String(b.Ora || '')));
+}
+function totaliPasti(lista) {
+  return lista.reduce((t, p) => ({ kcal: t.kcal + n(p.Kcal), p: t.p + n(p['Proteine (g)']), c: t.c + n(p['Carboidrati (g)']), g: t.g + n(p['Grassi (g)']) }),
+    { kcal: 0, p: 0, c: 0, g: 0 });
+}
+
+/** Salva parametri nel foglio (azione parametri) e subito nella copia locale. */
+async function salvaParametri(valori, messaggio) {
+  dati.parametri = Object.assign({}, dati.parametri, valori);
+  LS.set('dati', dati);
+  try {
+    const r = await api('parametri', { valori });
+    if (r.mutuo !== undefined && dati.casa) dati.casa.mutuo = r.mutuo;
+    LS.set('dati', dati);
+    toast(messaggio || 'Salvato');
+    if (tablet) tablet.aggiornaWidget();
+  } catch (e) {
+    toast('Non salvato nel foglio (serve la rete): ' + (e.message || e));
+  }
+}
+
+function anelloSvg(valore, obiettivo, testo, sotto) {
+  const f = obiettivo > 0 ? Math.min(1, valore / obiettivo) : 0, r = 42, cir = 2 * Math.PI * r;
+  return `<svg class="anello" viewBox="0 0 100 100" role="img" aria-label="${esc(testo)} ${esc(sotto)}">
+    <circle cx="50" cy="50" r="${r}" fill="none" stroke="rgba(90,200,255,.15)" stroke-width="9"/>
+    <circle cx="50" cy="50" r="${r}" fill="none" stroke="${valore > obiettivo * 1.1 ? 'var(--giallo)' : 'var(--accento)'}" stroke-width="9" stroke-linecap="round"
+      stroke-dasharray="${cir * f} ${cir}" transform="rotate(-90 50 50)"/>
+    <text x="50" y="50" text-anchor="middle" font-size="17" font-weight="700" fill="var(--testo)">${esc(testo)}</text>
+    <text x="50" y="65" text-anchor="middle" font-size="8.5" fill="var(--testo-2)">${esc(sotto)}</text></svg>`;
+}
+
+function barraMacro(nome, g, obiettivo, colore) {
+  return `<div class="macro-riga"><div class="budget-testa"><span>${nome}</span><span class="num"><strong>${Math.round(g)}</strong>/${obiettivo} g</span></div>
+    <div class="barra-mutuo sottile"><span style="width:${Math.min(100, obiettivo ? g / obiettivo * 100 : 0)}%;background:${colore}"></span></div></div>`;
+}
+
+// Diario ────────────────────────────
+
+function pastoPerOra(h) { return h < 11 ? 'Colazione' : h < 15 ? 'Pranzo' : h < 18 ? 'Spuntino' : 'Cena'; }
+
+function vistaCibo(main, query) {
+  const k = (query && query.get('giorno')) || oggiK();
+  const pi = piano(), tipo = tipoDel(pi, k), ob = pi.kcal[tipo], mg = macroDel(pi, ob);
+  const lista = pastiDel(k), tot = totaliPasti(lista);
+  const alimenti = righe('Alimenti').filter(a => String(a.Nome || '').trim()).sort((a, b) => n(b.Usi) - n(a.Usi));
+  let pastoScelto = pastoPerOra(new Date().getHours());
+  const gruppi = ORDINE_PASTI.concat(lista.map(p => p.Pasto).filter(x => x && ORDINE_PASTI.indexOf(x) < 0))
+    .filter((x, i, a) => a.indexOf(x) === i);
+
+  main.innerHTML = `
+    <div class="testata"><h1>Cibo</h1><span class="piccolo">${k === oggiK() ? 'oggi' : dataBreve(k)}</span></div>
+    ${schedeCibo('cibo')}
+    <div class="carta riga-anello">
+      ${anelloSvg(tot.kcal, ob, String(Math.round(tot.kcal)), 'di ' + ob + ' kcal')}
+      <div class="corpo-anello">
+        <div class="etichetta">${k === oggiK() ? 'Oggi' : dataBreve(k)} · ${NOMI_TIPO[tipo]}</div>
+        <div class="piccolo">${tot.kcal <= ob ? 'restano <strong>' + Math.round(ob - tot.kcal) + ' kcal</strong>' : '<span class="testo-giallo">oltre di ' + Math.round(tot.kcal - ob) + ' kcal</span>'} · obiettivo del giorno dal Piano</div>
+        ${barraMacro('Prot', tot.p, mg.p, '#5fd3b0')}${barraMacro('Carb', tot.c, mg.c, '#6ea8ff')}${barraMacro('Grassi', tot.g, mg.g, '#ffcf5a')}
+      </div>
+    </div>
+    <div class="carta" style="margin-top:12px">
+      <div class="etichetta">Aggiungi</div>
+      <form id="f-cibo" class="riga-aggiungi"><input id="cibo-testo" placeholder='cosa hai mangiato… (es. "pasta 100 g")' autocomplete="off" list="lista-alimenti">
+        <datalist id="lista-alimenti">${alimenti.map(a => `<option value="${esc(a.Nome)}">`).join('')}</datalist>
+        <button class="primario" type="submit" aria-label="Aggiungi">＋</button></form>
+      <div class="chips"><button type="button" class="chip attivo" id="cibo-pasto">${pastoScelto}</button><span class="piccolo" style="align-self:center">rapidi:</span>
+        ${alimenti.slice(0, 6).map(a => `<button type="button" class="chip" data-rapido="${esc(a.ID)}">${esc(a.Nome)} ${Math.round(n(a.Kcal))}</button>`).join('') || '<span class="piccolo" style="align-self:center">nessun alimento salvato</span>'}</div>
+      <div id="cibo-nuovo" class="nascosto">
+        <p class="piccolo">Alimento nuovo: scrivi una volta kcal e macro, poi resta tra i salvati.</p>
+        <div class="griglia-4"><label class="campo">kcal<input id="n-kcal" inputmode="decimal"></label><label class="campo">prot g<input id="n-p" inputmode="decimal"></label>
+          <label class="campo">carb g<input id="n-c" inputmode="decimal"></label><label class="campo">grassi g<input id="n-g" inputmode="decimal"></label></div>
+        <label class="campo-riga"><span><input type="checkbox" id="n-salva" checked> salva tra gli alimenti</span><button type="button" class="primario piccolo-b" id="n-ok">Aggiungi</button></label>
+      </div>
+      <p class="piccolo">kcal e macro dagli alimenti salvati; se è nuovo li scrivi una volta e restano.</p>
+    </div>
+    <div class="carta" style="margin-top:12px">
+      <div class="budget-testa"><span class="etichetta" style="margin:0">${k === oggiK() ? 'Oggi' : 'Il'} a tavola</span>
+        <span><a class="bottone piccolo-b" href="#/cibo?giorno=${spostaGiorni(k, -1)}" aria-label="Giorno prima">◀</a> ${dataBreve(k)}
+        ${k < oggiK() ? `<a class="bottone piccolo-b" href="#/cibo?giorno=${spostaGiorni(k, 1)}" aria-label="Giorno dopo">▶</a>` : ''}</span></div>
+      ${gruppi.map(g => {
+        const p = lista.filter(x => (x.Pasto || 'Spuntino') === g);
+        return `<div class="pasto-gruppo"><div class="budget-testa"><strong>${esc(g)}${p.length && p[0].Ora ? ' <span class="piccolo">' + esc(String(p[0].Ora).slice(0, 5)) + '</span>' : ''}</strong>
+          <span class="num">${p.length ? Math.round(totaliPasti(p).kcal) + ' kcal' : '<a href="#" data-aggiungi="' + esc(g) + '">＋ aggiungi</a>'}</span></div>
+          ${p.map(x => `<div class="budget-testa pasto-riga"><span>${esc(x['Cosa ho mangiato'] || '')}</span><span class="num">${Math.round(n(x.Kcal))}
+            <button class="piccolo-b lucchetto" data-elimina-pasto="${esc(x.ID)}" aria-label="Elimina">✕</button></span></div>`).join('')}</div>`;
+      }).join('')}
+    </div>
+    ${bottonePenna('Pasti')}`;
+
+  const aggiungi = (nome, valori, alimento) => {
+    const ora = k === oggiK() ? oraAdesso() : '12:00';
+    salva('Pasti', Object.assign({ 'Data': k, 'Ora': ora, 'Pasto': pastoScelto, 'Cosa ho mangiato': nome }, valori));
+    if (alimento) salva('Alimenti', { 'Usi': n(alimento.Usi) + 1 }, alimento.ID);
+    toast(nome + ' · ' + Math.round(n(valori.Kcal)) + ' kcal');
+    vistaCibo(main, query);
+  };
+  const valoriDi = (a, fattore) => ({ 'Kcal': Math.round(n(a.Kcal) * fattore), 'Proteine (g)': Math.round(n(a['Proteine (g)']) * fattore),
+    'Carboidrati (g)': Math.round(n(a['Carboidrati (g)']) * fattore), 'Grassi (g)': Math.round(n(a['Grassi (g)']) * fattore) });
+  $('#cibo-pasto', main).onclick = e => { pastoScelto = ORDINE_PASTI[(ORDINE_PASTI.indexOf(pastoScelto) + 1) % 4]; e.target.textContent = pastoScelto; };
+  $$('[data-rapido]', main).forEach(b => {
+    b.onclick = () => { const a = alimenti.find(x => x.ID === b.dataset.rapido); aggiungi(a.Nome + (a.Porzione ? ' ' + a.Porzione : ''), valoriDi(a, 1), a); };
+  });
+  $$('[data-aggiungi]', main).forEach(a => {
+    a.onclick = e => { e.preventDefault(); pastoScelto = a.dataset.aggiungi; $('#cibo-pasto', main).textContent = pastoScelto; $('#cibo-testo', main).focus(); };
+  });
+  $('#f-cibo', main).onsubmit = e => {
+    e.preventDefault();
+    const t = $('#cibo-testo', main).value.trim();
+    if (!t) return;
+    // "pasta 100 g": se l'alimento salvato ha porzione "100 g" e qui c'è un'altra quantità, kcal in proporzione.
+    const m = t.match(/^(.*?)\s*(\d+(?:[.,]\d+)?)\s*(g|ml)?$/i);
+    const nome = (m ? m[1] : t).trim();
+    const a = alimenti.find(x => normalizza(x.Nome) === normalizza(nome)) || alimenti.find(x => normalizza(x.Nome) === normalizza(t));
+    if (a) {
+      const q = m && m[2] ? n(m[2]) : 0, porz = n(String(a.Porzione || '').replace(/[^\d.,]/g, ''));
+      aggiungi(t, valoriDi(a, q && porz ? q / porz : 1), a);
+      return;
+    }
+    $('#cibo-nuovo', main).classList.remove('nascosto');
+    $('#n-kcal', main).focus();
+  };
+  $('#n-ok', main).onclick = () => {
+    const t = $('#cibo-testo', main).value.trim();
+    const v = { 'Kcal': n($('#n-kcal', main).value), 'Proteine (g)': n($('#n-p', main).value), 'Carboidrati (g)': n($('#n-c', main).value), 'Grassi (g)': n($('#n-g', main).value) };
+    let al = null;
+    if ($('#n-salva', main).checked) {
+      const m = t.match(/^(.*?)\s*(\d+(?:[.,]\d+)?\s*(?:g|ml))$/i);
+      const id = nuovoId();
+      salva('Alimenti', Object.assign({ 'Nome': m ? m[1].trim() : t, 'Porzione': m ? m[2].replace(/\s+/g, ' ') : '', 'Usi': 0 }, v), id);
+      al = { ID: id, Usi: 0 };
+    }
+    aggiungi(t, v, al);
+  };
+  $$('[data-elimina-pasto]', main).forEach(b => { b.onclick = () => { elimina('Pasti', b.dataset.eliminaPasto); vistaCibo(main, query); }; });
+}
+
+// Piano ────────────────────────────
+
+function vistaPiano(main) {
+  const pi = piano(), p = calcPeso();
+  const obPeso = n(par('Obiettivo peso')), entro = valoreCampo(par('Peso obiettivo entro'), 'date');
+  let ritmo = '';
+  if (p.ultimo && obPeso && entro) {
+    const sett = giorniTra(oggiK(), entro) / 7;
+    if (sett > 0) {
+      const v = (obPeso - p.ultimo.kg) / sett;
+      ritmo = `≈ ${v > 0 ? '+' : ''}${num1.format(v)} kg/settimana · ${Math.abs(v) <= 0.75 ? '<span class="testo-verde">sostenibile</span>' : '<span class="testo-giallo">troppo veloce</span>'}`;
+    }
+  }
+  const o = new Date(), mese = chiave(o).slice(0, 7), giorniMese = new Date(o.getFullYear(), o.getMonth() + 1, 0).getDate();
+  let kMese = 0;
+  for (let d = 1; d <= giorniMese; d++) kMese += obiettivoDel(pi, mese + '-' + pad(d));
+  const media = pi.settimana / 7, mg = macroDel(pi, media);
+  const pctP = Math.round(mg.p * 4 / media * 100), pctG = Math.round(pi.grassiPct), pctC = Math.max(0, 100 - pctP - pctG);
+  const campo = (nome, et, val, tipo) => `<label class="campo-riga">${et}<input type="${tipo || 'text'}" ${tipo ? '' : 'inputmode="decimal"'} data-par="${esc(nome)}" value="${esc(val)}" placeholder="—"></label>`;
+
+  main.innerHTML = `
+    <div class="testata"><h1>Piano</h1><span class="piccolo">si salva nel foglio</span></div>
+    ${schedeCibo('piano')}
+    <div class="carta">
+      <div class="etichetta">Obiettivo</div>
+      <div class="chips">${['dimagrire', 'mantenere', 'massa'].map(x => `<button type="button" class="chip ${pi.obiettivo === x ? 'attivo' : ''}" data-obiettivo="${x}">${x}</button>`).join('')}</div>
+      ${campo('Obiettivo peso', 'Peso oggi ' + (p.ultimo ? num1.format(p.ultimo.kg) : '—') + ' → obiettivo (kg)', par('Obiettivo peso') || '')}
+      ${campo('Peso obiettivo entro', 'Entro', entro, 'date')}
+      <p class="piccolo">${ritmo || 'scrivi obiettivo e data per vedere il ritmo'}</p>
+    </div>
+    <div class="carta" style="margin-top:12px">
+      <div class="budget-testa"><span class="etichetta" style="margin:0">Kcal della settimana</span><strong class="num grande">${Math.round(pi.settimana).toLocaleString('it-IT')} kcal</strong></div>
+      <p class="piccolo">somma dei 7 giorni secondo il tipo · mese: ${Math.round(kMese).toLocaleString('it-IT')} kcal</p>
+      ${campo('Kcal giorno allenamento', '<span class="testo-accento">A</span> giorno di allenamento', pi.kcal.A)}
+      ${campo('Kcal giorno riposo', 'R riposo', pi.kcal.R)}
+      ${campo('Kcal giorno libero', '<span class="testo-giallo">L</span> pasto libero', pi.kcal.L)}
+      <div class="settimana-tipo">${SETTIMANA.map((g, i) => `<div><span class="piccolo">${g.charAt(0)}</span>
+        <button type="button" class="giorno-tipo tipo-${pi.tipi.charAt(i)}" data-giorno="${i}">${pi.tipi.charAt(i)}</button></div>`).join('')}</div>
+      <p class="piccolo">settimana tipo: tocca un giorno per cambiare A → R → L${String(par('Settimana tipo cibo') || '').length === 7 ? '' : ' · ora i giorni A seguono la scheda di allenamento'}</p>
+    </div>
+    <div class="carta" style="margin-top:12px">
+      <div class="etichetta">Macro (% kcal, giorno medio)</div>
+      <div class="barra-macro"><span style="width:${pctP}%;background:#5fd3b0"></span><span style="width:${pctC}%;background:#6ea8ff"></span><span style="width:${pctG}%;background:#ffcf5a"></span></div>
+      <p class="piccolo">■ prot ${mg.p} g · ■ carb ${mg.c} g · ■ grassi ${mg.g} g</p>
+      ${campo('Proteine (g/kg)', 'Proteine (g per kg)', pi.gkg)}
+      ${campo('Grassi (% kcal)', 'Grassi (% delle kcal)', pi.grassiPct)}
+      <p class="piccolo">proteine = g/kg × peso · i carboidrati sono il resto</p>
+    </div>`;
+
+  $$('[data-obiettivo]', main).forEach(b => { b.onclick = () => { salvaParametri({ 'Cibo obiettivo': b.dataset.obiettivo }, 'Obiettivo: ' + b.dataset.obiettivo); vistaPiano(main); }; });
+  $$('[data-par]', main).forEach(i => { i.onchange = () => { salvaParametri({ [i.dataset.par]: i.value }, 'Salvato'); vistaPiano(main); }; });
+  $$('[data-giorno]', main).forEach(b => {
+    b.onclick = () => {
+      const t = pi.tipi.split(''), i = Number(b.dataset.giorno);
+      t[i] = { A: 'R', R: 'L', L: 'A' }[t[i]];
+      salvaParametri({ 'Settimana tipo cibo': t.join('') }, 'Settimana tipo salvata');
+      vistaPiano(main);
+    };
+  });
+}
+
+// Controlli ────────────────────────────
+
+function vistaControlli(main, query) {
+  const pi = piano(), oggi = oggiK();
+  const mese = (query && query.get('mese')) || oggi.slice(0, 7);
+  const d0 = daChiave(mese + '-01'), giorniMese = new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate();
+  const giorni = [];
+  for (let d = 1; d <= giorniMese; d++) {
+    const k = mese + '-' + pad(d), t = totaliPasti(pastiDel(k)), ob = obiettivoDel(pi, k);
+    giorni.push({ k, d, kcal: t.kcal, p: t.p, ob, futuro: k > oggi, vuoto: t.kcal === 0 });
+  }
+  const passati = giorni.filter(g => !g.futuro && !g.vuoto);
+  const kcalMese = passati.reduce((s, g) => s + g.kcal, 0), previste = passati.reduce((s, g) => s + g.ob, 0);
+  const nelRange = passati.filter(g => Math.abs(g.kcal - g.ob) <= g.ob * 0.1).length;
+  const protMedia = passati.length ? passati.reduce((s, g) => s + g.p, 0) / passati.length : 0, protOb = macroDel(pi, pi.settimana / 7).p;
+  // Settimana (unità del piano)
+  const lun = spostaGiorni(oggi, -((daChiave(oggi).getDay() + 6) % 7));
+  let kSett = 0, obSettFinora = 0;
+  for (let i = 0; i < 7; i++) { const k = spostaGiorni(lun, i); if (k <= oggi) { kSett += totaliPasti(pastiDel(k)).kcal; obSettFinora += obiettivoDel(pi, k); } }
+  // Ultimi 30 giorni
+  const ult = [];
+  for (let i = 29; i >= 0; i--) { const k = spostaGiorni(oggi, -i); ult.push({ k, kcal: totaliPasti(pastiDel(k)).kcal, ob: obiettivoDel(pi, k) }); }
+  const pesi = calcPeso().misure.filter(m => m.data >= spostaGiorni(oggi, -30));
+  const perPasto = {};
+  righe('Pasti').filter(p => p.Data >= spostaGiorni(oggi, -30)).forEach(p => { perPasto[p.Pasto || 'altro'] = (perPasto[p.Pasto || 'altro'] || 0) + n(p.Kcal); });
+  const totP = Object.values(perPasto).reduce((a, b) => a + b, 0);
+  const pesante = Object.keys(perPasto).sort((a, b) => perPasto[b] - perPasto[a])[0];
+  // Da migliorare: regole semplici, la prima che vale.
+  const sotto = passati.filter(g => g.p < protOb * 0.9).length;
+  const sopra = passati.filter(g => g.kcal > g.ob * 1.1).length;
+  let consiglio = 'Tutto nel piano: continua così.';
+  if (!passati.length) consiglio = 'Segna i pasti nel Diario: i controlli partono dai giorni con almeno un pasto.';
+  else if (sotto >= passati.length / 2) consiglio = `Proteine sotto obiettivo ${sotto} giorni su ${passati.length}: a colazione +20 g (es. yogurt greco 250 g).`;
+  else if (sopra > nelRange) consiglio = `${sopra} giorni sopra il piano: guarda ${pesante ? 'la ' + pesante.toLowerCase() : 'il pasto più pesante'} (${totP ? Math.round(perPasto[pesante] / totP * 100) : 0}% delle kcal).`;
+  else if (totP && perPasto[pesante] / totP > 0.4) consiglio = `${pesante}: ${Math.round(perPasto[pesante] / totP * 100)}% delle kcal. Spostane un po' a pranzo o allo spuntino.`;
+
+  const colore = g => (g.futuro || g.vuoto ? '' : Math.abs(g.kcal - g.ob) <= g.ob * 0.1 ? 'nel' : g.kcal > g.ob ? 'sopra' : 'sotto');
+  const vuoti = (d0.getDay() + 6) % 7;
+  const W = 340, H = 110, max = Math.max(1, ...ult.map(x => Math.max(x.kcal, x.ob)));
+  const linea = campo => ult.map((x, i) => `${(i * (W / 29)).toFixed(1)},${(H - 8 - (H - 16) * x[campo] / max).toFixed(1)}`).join(' ');
+
+  main.innerHTML = `
+    <div class="testata"><h1>Controlli</h1>${selettoreMese('controlli', mese)}</div>
+    ${schedeCibo('controlli')}
+    <div class="carta"><div class="etichetta">Questa settimana</div>
+      <div class="budget-testa"><span>${Math.round(kSett).toLocaleString('it-IT')} kcal su ${Math.round(obSettFinora).toLocaleString('it-IT')} previste finora</span>
+      <strong class="${Math.abs(kSett - obSettFinora) <= obSettFinora * 0.1 ? 'testo-verde' : 'testo-giallo'}">${kSett > obSettFinora * 1.1 ? 'sopra' : kSett < obSettFinora * 0.9 ? 'sotto' : 'in linea'}</strong></div>
+      <p class="piccolo">obiettivo della settimana ${Math.round(pi.settimana).toLocaleString('it-IT')} kcal · restano ${Math.max(0, Math.round(pi.settimana - kSett)).toLocaleString('it-IT')}</p></div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">${nomeMese(mese)} finora</div>
+      <div class="griglia-3">
+        <div><div class="piccolo">kcal mangiate</div><div class="grande num">${Math.round(kcalMese).toLocaleString('it-IT')}</div><div class="piccolo">di ${Math.round(previste).toLocaleString('it-IT')} previste</div></div>
+        <div><div class="piccolo">giorni nel range</div><div class="grande num testo-verde">${nelRange}/${passati.length}</div><div class="piccolo">±10% dal piano</div></div>
+        <div><div class="piccolo">proteine medie</div><div class="grande num">${Math.round(protMedia)} g</div><div class="piccolo">obiettivo ${protOb}</div></div></div>
+      <div class="calendario">${'<span></span>'.repeat(vuoti)}${giorni.map(g => `<a href="#/cibo?giorno=${g.k}" class="cal ${colore(g)} ${g.k === oggi ? 'oggi' : ''}">${g.d}</a>`).join('')}</div>
+      <p class="piccolo"><span class="quadratino" style="background:var(--verde)"></span>nel piano <span class="quadratino" style="background:var(--giallo)"></span>sopra
+        <span class="quadratino" style="background:var(--accento)"></span>sotto · tocca un giorno = i suoi pasti</p></div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Ultimi 30 giorni</div>
+      <p class="piccolo" style="margin:0">━ kcal ╍ piano</p>
+      <svg class="grafico-bollette" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="kcal degli ultimi 30 giorni">
+        <polyline points="${linea('ob')}" fill="none" stroke="var(--giallo)" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <polyline points="${linea('kcal')}" fill="none" stroke="var(--accento)" stroke-width="2"/></svg>
+      <div class="budget-testa"><span>Peso</span><strong class="num">${pesi.length > 1 ? num1.format(pesi[0].kg) + ' → ' + num1.format(pesi[pesi.length - 1].kg) + ' kg' : '—'}</strong></div>
+      <div class="budget-testa"><span>Pasto più "pesante"</span><strong>${pesante && totP ? esc(pesante.toLowerCase()) + ' · ' + Math.round(perPasto[pesante] / totP * 100) + '% delle kcal' : '—'}</strong></div></div>
+    <div class="carta evidenza" style="margin-top:12px"><div class="etichetta testo-giallo">Da migliorare</div><div>${esc(consiglio)}</div></div>`;
+  collegaMese(main);
 }
 
 // Dieta ────────────────────────────
@@ -1214,7 +1761,8 @@ function vistaPeso(main, query) {
   const oggiFatto = p.ultimo && p.ultimo.data === oggiK();
 
   main.innerHTML = `
-    <h1>Peso</h1>
+    <div class="testata"><h1>Peso</h1></div>
+    ${schedeCibo('peso')}
     <div class="carta">
       <div class="etichetta">${oggiFatto ? 'Correggi il peso di oggi' : 'Peso di oggi'}</div>
       <div class="peso-input">
@@ -1445,3 +1993,11 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 disegna();
 aggiornaStato();
 pianificaSync(0);
+
+/** Voce della barra in basso per una pagina (v7): le sottopagine accendono la loro sezione. */
+function gruppoNav(nome) {
+  if (SCHEDE_FINANZE.some(s => s[0] === nome)) return 'finanze';
+  if (SCHEDE_CIBO.some(s => s[0] === nome) || nome === 'dieta') return 'cibo';
+  if (SCHEDE_ALL.some(s => s[0] === nome)) return 'allenamento';
+  return nome;
+}
