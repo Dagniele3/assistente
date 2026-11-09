@@ -25,7 +25,7 @@ let dati = LS.get('dati', null);
 let coda = LS.get('coda', []);
 let statoSync = { stato: 'idle', ultimo: LS.get('ultimoSync', null), errore: '' };
 
-const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti'];
+const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti', 'Salute', 'Attività', 'Uscite'];
 
 function datiVuoti() {
   const schede = {};
@@ -147,7 +147,7 @@ async function sincronizza() {
       LS.set('coda', coda);
     }
     const fresco = await api('dati');
-    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, server: fresco.server };
+    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server };
     coda.forEach(applicaLocale); // modifiche fatte durante l'invio
     LS.set('dati', dati);
     statoSync.ultimo = new Date().toISOString();
@@ -328,6 +328,7 @@ const VISTE = {
   '': vistaHome, finanze: vistaFinanze, movimenti: vistaMovimenti, budget: vistaBudget, bollette: vistaBollette, mutuo: vistaMutuo, scadenze: vistaScadenze, spesa: vistaSpesa,
   allenamento: vistaAllenamento, scheda: vistaScheda, progressi: vistaProgressi,
   cibo: vistaCibo, dieta: vistaCibo, piano: vistaPiano, controlli: vistaControlli, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
+  fuori: vistaFuori, uscita: vistaUscita, anno: vistaAnnoFuori, vola: vistaSiVola, // v8
 };
 
 function percorso() {
@@ -341,6 +342,7 @@ function disegna() {
   if (p.nome === 'quaderno') { apriQuaderno(p.query.get('dest') || 'Nessuna'); return; }
   chiudiQuadernoSeAperto();
   const vista = VISTE[p.nome] || vistaHome;
+  aggiornaBadgeFuori(); // v8
   $$('#nav a').forEach(a => a.classList.toggle('attiva', a.getAttribute('href') === '#/' + gruppoNav(p.nome)));
   const main = $('#vista');
   if (!config.url || !config.token) { vistaImpostazioni(main, true); return; }
@@ -1329,8 +1331,10 @@ function vistaProgressi(main, query) {
   const oggi = oggiK(), lun = spostaGiorni(oggi, -((daChiave(oggi).getDay() + 6) % 7));
   const log = righe('Log').filter(l => l.Data && l.Esercizio);
   const obiettivo = numPar('Allenamenti a settimana (obiettivo)', new Set(righe('Scheda').filter(e => e.Esercizio).map(e => normalizza(e.Giorno))).size || 3);
-  const giornoFatto = k => log.some(l => l.Data === k);
-  const cardio = k => log.some(l => l.Data === k && /corsa|bici|cammin|montagn|nuoto|cardio/i.test(l.Esercizio));
+  // v8: contano anche le sessioni dell'orologio (corsa, escursione, palestra…), senza segnarle a mano.
+  const sess = sessioniOrologioWeb();
+  const giornoFatto = k => log.some(l => l.Data === k) || sess.some(s => s.data === k);
+  const cardio = k => log.some(l => l.Data === k && /corsa|bici|cammin|montagn|nuoto|cardio/i.test(l.Esercizio)) || sess.some(s => s.data === k && s.cardio);
   // Costanza: ultime 4 settimane.
   let fatti = 0, pianificate = 0, eseguite = 0;
   const celle = [];
@@ -1632,7 +1636,9 @@ function vistaPiano(main) {
       ${campo('Proteine (g/kg)', 'Proteine (g per kg)', pi.gkg)}
       ${campo('Grassi (% kcal)', 'Grassi (% delle kcal)', pi.grassiPct)}
       <p class="piccolo">proteine = g/kg × peso · i carboidrati sono il resto</p>
-    </div>`;
+    </div>
+    ${cartaBilancio(true)}`;
+  collegaBilancio(main, () => vistaPiano(main));
 
   $$('[data-obiettivo]', main).forEach(b => { b.onclick = () => { salvaParametri({ 'Cibo obiettivo': b.dataset.obiettivo }, 'Obiettivo: ' + b.dataset.obiettivo); vistaPiano(main); }; });
   $$('[data-par]', main).forEach(i => { i.onchange = () => { salvaParametri({ [i.dataset.par]: i.value }, 'Salvato'); vistaPiano(main); }; });
@@ -1694,6 +1700,7 @@ function vistaControlli(main, query) {
       <div class="budget-testa"><span>${Math.round(kSett).toLocaleString('it-IT')} kcal su ${Math.round(obSettFinora).toLocaleString('it-IT')} previste finora</span>
       <strong class="${Math.abs(kSett - obSettFinora) <= obSettFinora * 0.1 ? 'testo-verde' : 'testo-giallo'}">${kSett > obSettFinora * 1.1 ? 'sopra' : kSett < obSettFinora * 0.9 ? 'sotto' : 'in linea'}</strong></div>
       <p class="piccolo">obiettivo della settimana ${Math.round(pi.settimana).toLocaleString('it-IT')} kcal · restano ${Math.max(0, Math.round(pi.settimana - kSett)).toLocaleString('it-IT')}</p></div>
+    ${cartaBilancio()}
     <div class="carta" style="margin-top:12px"><div class="etichetta">${nomeMese(mese)} finora</div>
       <div class="griglia-3">
         <div><div class="piccolo">kcal mangiate</div><div class="grande num">${Math.round(kcalMese).toLocaleString('it-IT')}</div><div class="piccolo">di ${Math.round(previste).toLocaleString('it-IT')} previste</div></div>
@@ -1711,6 +1718,7 @@ function vistaControlli(main, query) {
       <div class="budget-testa"><span>Pasto più "pesante"</span><strong>${pesante && totP ? esc(pesante.toLowerCase()) + ' · ' + Math.round(perPasto[pesante] / totP * 100) + '% delle kcal' : '—'}</strong></div></div>
     <div class="carta evidenza" style="margin-top:12px"><div class="etichetta testo-giallo">Da migliorare</div><div>${esc(consiglio)}</div></div>`;
   collegaMese(main);
+  collegaBilancio(main, () => vistaControlli(main, query));
 }
 
 // Dieta ────────────────────────────
@@ -1988,6 +1996,476 @@ window.addEventListener('offline', () => { statoSync.stato = 'offline'; aggiorna
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pianificaSync(0); });
 setInterval(() => { if (!document.hidden && coda.length) sincronizza(); }, 60000);
 
+
+// ───────────────────────── v8: Fuori (Diario, Uscita, Anno, Si vola?), orologio (SPEC v8, mockup 29) ─────────────────────────
+// Le uscite arrivano da sole dalle sessioni dell'orologio (scheda Uscite, creata dallo script con l'azione `salute`).
+// Tipo finale = "Tipo scelto" (la scelta di Daniele vince sempre) altrimenti "Tipo" automatico; "da classificare" in cima.
+
+const SCHEDE_FUORI = [['fuori', 'Diario'], ['uscita', 'Uscita'], ['anno', 'Anno'], ['vola', 'Si vola?']];
+const TIPI_FUORI = {
+  volo: { icona: '🪂', nome: 'Volo', filtro: 'voli' }, montagna: { icona: '⛰', nome: 'Montagna', filtro: 'montagna' },
+  scalata: { icona: '🧗', nome: 'Scalata', filtro: 'scalate' }, neve: { icona: '❄', nome: 'Neve', filtro: 'neve' },
+  bici: { icona: '🚵', nome: 'Bici', filtro: 'bici' },
+};
+const FILTRI_FUORI = [['tutte', 'tutte'], ['voli', '🪂 voli'], ['montagna', '⛰ montagna'], ['scalate', '🧗 scalate'], ['neve', '❄ neve'], ['bici', '🚵 bici']];
+
+function schedeFuori(attiva) {
+  return `<nav class="schede-fin">${SCHEDE_FUORI.map(s => `<a href="#/${s[0]}" class="${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`).join('')}</nav>`;
+}
+
+function tipoUscita(u) { return normalizza(u['Tipo scelto']) || normalizza(u.Tipo) || 'da classificare'; }
+function usciteTutte() { return righe('Uscite').filter(u => u.Data).sort((a, b) => (a.Data < b.Data ? 1 : a.Data > b.Data ? -1 : 0)); }
+function usciteFuori() { return usciteTutte().filter(u => TIPI_FUORI[tipoUscita(u)]); }
+function daClassificare() { return usciteTutte().filter(u => tipoUscita(u) === 'da classificare'); }
+function oreMinuti(min) { const m = Math.round(n(min)); return m >= 60 ? Math.floor(m / 60) + 'h' + pad(m % 60) : m + ' min'; }
+function intIt(x) { return Math.round(n(x)).toLocaleString('it-IT'); }
+
+/** Sessioni dell'orologio (scheda Attività) con la categoria finale, per la costanza e la settimana. */
+function sessioniOrologioWeb() {
+  const scelte = {};
+  righe('Uscite').forEach(u => { if (u['ID attività']) scelte[u['ID attività']] = tipoUscita(u); });
+  return righe('Attività').filter(a => a.Data).map(a => {
+    const t = String(a.Tipo || '').toUpperCase();
+    const cat = scelte[a.ID] || (/STRENGTH|WEIGHT|CALISTHENICS|HIGH_INTENSITY|TREADMILL|STATIONARY|SWIMMING|ELLIPTICAL|ROWING|YOGA|PILATES|STAIR|BOOT_CAMP|EXERCISE_CLASS|STRETCHING/.test(t) ? 'allenamento'
+      : /RUNNING|WALKING/.test(t) ? (n(a['Dislivello (m)']) >= (t === 'WALKING' ? 300 : 400) ? 'montagna' : 'allenamento') : 'altro');
+    return { data: a.Data, tipo: t, categoria: cat, cardio: !/STRENGTH|WEIGHT|CALISTHENICS/.test(t) };
+  }).filter(s => s.categoria !== 'non conta' && s.categoria !== 'da classificare');
+}
+
+/** Distanza in metri tra due punti. */
+function metri(a, b) {
+  const R = 6371000, r = Math.PI / 180, dLa = (b[0] - a[0]) * r, dLo = (b[1] - a[1]) * r;
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function puntoDa(s) { const p = String(s || '').split(',').map(Number); return p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1]) && p[0] ? [p[0], p[1]] : null; }
+
+/** Località preferite di FUORI: "nome|lat|lon|quota|S:2,SO:1; …". */
+function preferitiFuori() {
+  return String(par('Località preferite') || '').split(';').map(x => x.trim()).filter(Boolean).map(x => {
+    const f = x.split('|');
+    return { nome: f[0].trim(), lat: n(f[1]), lon: n(f[2]), quota: n(f[3]), orient: (f[4] || '').trim() };
+  }).filter(p => p.lat);
+}
+
+const ROSA8 = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+
+/**
+ * Decollo noto entro 300 m dalla partenza: prima i preferiti, poi OpenStreetMap (Overpass, dal browser, con cache).
+ * Ritorna { nome, orient } oppure null.
+ */
+async function decolloVicino(partenza) {
+  const p = puntoDa(partenza);
+  if (!p) return null;
+  for (const f of preferitiFuori()) if (metri(p, [f.lat, f.lon]) <= 300) return { nome: f.nome, orient: f.orient.replace(/:\d/g, '').replace(/,/g, ' / ') };
+  const cache = LS.get('decolliVicini', {}), k = p[0].toFixed(3) + ',' + p[1].toFixed(3);
+  if (cache[k] !== undefined) return cache[k];
+  const q = `[out:json][timeout:20];(nwr["free_flying:site"="takeoff"](around:300,${p[0]},${p[1]});nwr["sport"="free_flying"](around:300,${p[0]},${p[1]}););out center tags 10;`;
+  for (const s of ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']) {
+    try {
+      const r = await fetch(s + '?data=' + encodeURIComponent(q));
+      if (!r.ok) continue;
+      const j = await r.json();
+      const el = (j.elements || []).filter(e => e.tags && !/landing|packing/.test(e.tags['free_flying:site'] || ''));
+      let ris = null;
+      if (el.length) {
+        const t = el[0].tags;
+        ris = { nome: t.name || t.description || 'decollo OSM', orient: t['free_flying:site_orientation'] || t.direction || '' };
+      }
+      cache[k] = ris;
+      LS.set('decolliVicini', cache);
+      return ris;
+    } catch (e) { /* prossimo server */ }
+  }
+  return null;
+}
+
+/** Meteo del giorno dell'uscita (archivio di Open-Meteo) → testo breve per la colonna "Meteo (testo)". */
+async function meteoDelGiorno(u) {
+  const p = puntoDa(u.Partenza);
+  if (!p || !u.Data) return '';
+  const ora = Number(String(u.Inizio || '13').slice(0, 2)) || 13;
+  const url = `https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=${p[0]}&longitude=${p[1]}&start_date=${u.Data}&end_date=${u.Data}` +
+    '&hourly=temperature_2m,dew_point_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_850hPa&timezone=Europe%2FRome';
+  const j = await (await fetch(url)).json();
+  const h = j.hourly;
+  if (!h || !h.time) return '';
+  const i = Math.min(h.time.length - 1, Math.max(0, ora));
+  const v = Math.round(h.wind_speed_10m[i]), raf = Math.round(h.wind_gusts_10m[i]), v15 = Math.round(h.wind_speed_850hPa[i]);
+  const dir = ROSA8[Math.round(((h.wind_direction_10m[i] % 360) + 360) % 360 / 45) % 8];
+  const base = Math.round(125 * (h.temperature_2m[i] - h.dew_point_2m[i]) / 100) * 100 + (n(j.elevation) || 0);
+  const sv = numPar('Volo vento medio max (km/h)', 25), sr = numPar('Volo raffiche max (km/h)', 30), s15 = numPar('Volo vento 1500 m max (km/h)', 30);
+  const sem = v <= sv && raf <= sr && v15 <= s15 ? 'verde' : v <= sv * 1.2 && raf <= sr * 1.2 && v15 <= s15 * 1.2 ? 'giallo' : 'rosso';
+  return `${Math.round(h.temperature_2m[i])}° · vento ${v} km/h ${dir} · raffiche ${raf} · 1500 m: ${v15} km/h · base ${intIt(base)} m · semaforo ${sem}`;
+}
+
+function vistaFuori(main, query) {
+  const anni = [...new Set(usciteTutte().map(u => u.Data.slice(0, 4)))].sort().reverse();
+  const anno = (query && query.get('anno')) || String(new Date().getFullYear());
+  if (anni.indexOf(anno) < 0) anni.unshift(anno);
+  const filtro = (query && query.get('filtro')) || 'tutte';
+  const dell = usciteFuori().filter(u => u.Data.slice(0, 4) === anno);
+  const voli = dell.filter(u => tipoUscita(u) === 'volo');
+  const lista = filtro === 'tutte' ? dell : dell.filter(u => (TIPI_FUORI[tipoUscita(u)] || {}).filtro === filtro);
+  const dc = daClassificare();
+
+  main.innerHTML = `
+    <div class="testata"><h1>Fuori</h1><select id="fu-anno" class="cat-riga">${anni.map(a => `<option ${a === anno ? 'selected' : ''}>${a}</option>`).join('')}</select></div>
+    ${schedeFuori('fuori')}
+    <div class="carta griglia-3 fuori-tot">
+      <div><div class="piccolo">${anno}</div><div class="grande num">${dell.length}</div><div class="piccolo">uscite</div></div>
+      <div><div class="piccolo">voli</div><div class="grande num testo-verde">${voli.length}</div><div class="piccolo">${oreMinuti(voli.reduce((s, u) => s + n(u['Durata (min)']), 0))} in aria</div></div>
+      <div><div class="piccolo">dislivello</div><div class="grande num testo-accento">${intIt(dell.filter(u => tipoUscita(u) !== 'volo').reduce((s, u) => s + n(u['Dislivello (m)']), 0))}</div><div class="piccolo">m+</div></div>
+    </div>
+    ${dc.length ? `<div class="carta evidenza" style="margin-top:12px"><div class="etichetta testo-giallo">Da classificare · ${dc.length}</div>
+      ${dc.map(u => `<div class="da-class" data-id="${esc(u.ID)}">
+        <div class="budget-testa"><a href="#/uscita?id=${encodeURIComponent(u.ID)}"><strong>${esc(u.Nome || 'Attività')}</strong> · ${oreMinuti(u['Durata (min)'])}${n(u.Km) ? ' · ' + num1.format(n(u.Km)) + ' km' : ''}</a><span class="piccolo">${dataBreve(u.Data)}</span></div>
+        <p class="piccolo sugg" data-sugg="${esc(u.ID)}">${u.Suggerimento === 'volo' ? '🪂 <strong>Sembra un volo · confermi?</strong> (molta discesa, pochi passi)' : ''}</p>
+        <div class="chips">${[['volo', '🪂 Volo'], ['montagna', '⛰ Montagna'], ['scalata', '🧗 Scalata'], ['neve', '❄ Neve'], ['bici', '🚵 Bici'], ['allenamento', '🏋 Allenamento'], ['non conta', '✕ Non conta']]
+          .map(t => `<button type="button" class="chip" data-classifica="${t[0]}">${t[1]}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
+    <div class="chips" style="margin-top:12px">${FILTRI_FUORI.map(f => `<a class="chip ${f[0] === filtro ? 'attivo' : ''}" href="#/fuori?anno=${anno}&filtro=${f[0]}">${f[1]}</a>`).join('')}</div>
+    <div class="uscite">${lista.map(rigaUscita).join('') || '<p class="piccolo" style="padding:12px">Nessuna uscita.</p>'}</div>
+    <div style="text-align:center;margin-top:14px"><button type="button" class="primario" id="fu-mano">＋ uscita a mano</button>
+      <p class="piccolo">⌚ le uscite registrate con l'orologio arrivano da sole</p></div>
+    <div id="fu-form"></div>`;
+
+  $('#fu-anno', main).onchange = e => { location.hash = '#/fuori?anno=' + e.target.value + '&filtro=' + filtro; };
+  $$('[data-classifica]', main).forEach(b => {
+    b.onclick = () => {
+      const id = b.closest('[data-id]').dataset.id;
+      salva('Uscite', { 'Tipo scelto': b.dataset.classifica }, id);
+      toast(b.dataset.classifica === 'non conta' ? 'Nascosta (resta in Attività)' : 'Spostata in ' + b.dataset.classifica);
+      vistaFuori(main, query);
+    };
+  });
+  // Suggerimento "Sembra un volo": partenza entro 300 m da un decollo noto (in sottofondo, non sposta niente da solo).
+  dc.forEach(async u => {
+    if (u.Suggerimento === 'volo') return;
+    const d = await decolloVicino(u.Partenza);
+    const el = $(`[data-sugg="${CSS.escape(u.ID)}"]`, main);
+    if (d && el) el.innerHTML = `🪂 <strong>Sembra un volo · confermi?</strong> (partenza vicino a ${esc(d.nome)})`;
+  });
+  $('#fu-mano', main).onclick = () => formUscita($('#fu-form', main), null, () => vistaFuori(main, query));
+}
+
+function rigaUscita(u) {
+  const t = TIPI_FUORI[tipoUscita(u)] || { icona: '•' };
+  const volo = tipoUscita(u) === 'volo';
+  const sotto = volo ? `${oreMinuti(u['Durata (min)'])}${u.Decollo ? ' · decollo ' + esc(u.Decollo) : ''}`
+    : `${n(u['Dislivello (m)']) ? intIt(u['Dislivello (m)']) + ' m+ · ' : ''}${n(u.Km) ? num1.format(n(u.Km)) + ' km · ' : ''}${oreMinuti(u['Durata (min)'])}`;
+  const meteo = String(u['Meteo (testo)'] || '').split(' · ').slice(0, 2).join(' · ');
+  return `<a class="carta uscita" href="#/uscita?id=${encodeURIComponent(u.ID)}">
+    <span class="uscita-icona">${t.icona}</span>
+    <span class="uscita-corpo"><span class="budget-testa"><strong>${esc(u.Nome || t.nome || 'Uscita')}${volo ? ' · volo' : ''}</strong><span class="piccolo">${dataBreve(u.Data)}</span></span>
+      <span class="${volo ? 'testo-verde' : 'testo-accento'}">${sotto}</span>
+      <span class="piccolo">${esc(meteo)}${u.Diario ? ' · nota' : ''}${u['Foto (link cartella)'] ? ' · foto' : ''}${u.Persone ? ' · con ' + esc(u.Persone) : ''}</span></span></a>`;
+}
+
+/** Uscita a mano (o modifica dei dati base). */
+function formUscita(box, u, fatto) {
+  const v = u || { Data: oggiK(), Tipo: 'montagna' };
+  box.innerHTML = `<div class="carta" style="margin-top:12px"><div class="etichetta">${u ? 'Modifica uscita' : 'Nuova uscita'}</div>
+    <label class="campo-riga">Data<input type="date" id="fm-data" value="${esc(v.Data)}"></label>
+    <label class="campo-riga">Tipo<select id="fm-tipo">${Object.keys(TIPI_FUORI).map(k => `<option value="${k}" ${tipoUscita(v) === k ? 'selected' : ''}>${TIPI_FUORI[k].icona} ${TIPI_FUORI[k].nome}</option>`).join('')}</select></label>
+    <label class="campo-riga">Nome<input id="fm-nome" value="${esc(v.Nome || '')}" placeholder="es. Monte Soglio"></label>
+    <label class="campo-riga">Decollo (voli)<input id="fm-dec" value="${esc(v.Decollo || '')}"></label>
+    <label class="campo-riga">Durata (min)<input id="fm-dur" inputmode="numeric" value="${esc(v['Durata (min)'] || '')}"></label>
+    <label class="campo-riga">Dislivello (m+)<input id="fm-dis" inputmode="numeric" value="${esc(v['Dislivello (m)'] || '')}"></label>
+    <label class="campo-riga">Km<input id="fm-km" inputmode="decimal" value="${esc(v.Km || '')}"></label>
+    <label class="campo-riga">Quota max (m)<input id="fm-q" inputmode="numeric" value="${esc(v['Quota max (m)'] || '')}"></label>
+    <button type="button" class="primario" id="fm-salva">Salva</button></div>`;
+  $('#fm-salva', box).onclick = () => {
+    const tipo = $('#fm-tipo', box).value;
+    const valori = { Data: $('#fm-data', box).value, Nome: $('#fm-nome', box).value.trim(), Decollo: $('#fm-dec', box).value.trim(),
+      'Durata (min)': $('#fm-dur', box).value, 'Dislivello (m)': $('#fm-dis', box).value, Km: $('#fm-km', box).value, 'Quota max (m)': $('#fm-q', box).value };
+    if (u) valori['Tipo scelto'] = tipo; else valori.Tipo = tipo;
+    salva('Uscite', valori, u ? u.ID : null);
+    toast('Uscita salvata');
+    fatto();
+  };
+}
+
+const tracce = {};
+
+async function caricaTraccia(u) {
+  if (tracce[u.ID] !== undefined) return tracce[u.ID];
+  const loc = LS.get('traccia:' + u.ID, null);
+  if (loc) return (tracce[u.ID] = loc);
+  if (u.Traccia) return (tracce[u.ID] = u.Traccia);
+  try {
+    const r = await api('traccia', { id: u.ID });
+    tracce[u.ID] = r.traccia || '';
+    if (r.traccia) LS.set('traccia:' + u.ID, r.traccia);
+  } catch (e) { tracce[u.ID] = ''; }
+  return tracce[u.ID];
+}
+
+/** Traccia "lat,lon,ele;…" → SVG (nord in alto), con partenza e arrivo e le loro quote. */
+function svgTraccia(t, volo) {
+  const p = String(t || '').split(';').map(x => x.split(',').map(Number)).filter(x => x.length >= 2 && !isNaN(x[0]));
+  if (p.length < 2) return '';
+  const la = p.map(x => x[0]), lo = p.map(x => x[1]);
+  const cx = Math.cos((Math.min(...la) + Math.max(...la)) / 2 * Math.PI / 180);
+  const W = 340, H = 170, m = 22;
+  const dx = Math.max(1e-6, (Math.max(...lo) - Math.min(...lo)) * cx), dy = Math.max(1e-6, Math.max(...la) - Math.min(...la));
+  const s = Math.min((W - 2 * m) / dx, (H - 2 * m) / dy);
+  const X = x => m + (x[1] - Math.min(...lo)) * cx * s + ((W - 2 * m) - dx * s) / 2, Y = x => H - m - (x[0] - Math.min(...la)) * s - ((H - 2 * m) - dy * s) / 2;
+  const a = p[0], b = p[p.length - 1];
+  const et = (x, testo, sopra) => `<text x="${Math.min(W - 4, Math.max(4, X(x))).toFixed(0)}" y="${(Y(x) + (sopra ? -10 : 18)).toFixed(0)}" text-anchor="${X(x) > W / 2 ? 'end' : 'start'}" font-size="11" fill="#e8eefc">${testo}</text>`;
+  return `<svg class="traccia" viewBox="0 0 ${W} ${H}" role="img" aria-label="traccia GPS">
+    <rect width="${W}" height="${H}" rx="12" fill="#14333a"/>
+    <polyline points="${p.map(x => X(x).toFixed(1) + ',' + Y(x).toFixed(1)).join(' ')}" fill="none" stroke="#6ee7a8" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="${X(a)}" cy="${Y(a)}" r="6" fill="#ffcf5a"/><circle cx="${X(b)}" cy="${Y(b)}" r="6" fill="#7fd4ff"/>
+    ${et(a, (volo ? 'decollo ' : 'partenza ') + (a[2] != null && !isNaN(a[2]) ? intIt(a[2]) + ' m' : ''), Y(a) > 30)}
+    ${et(b, (volo ? 'atterraggio ' : 'arrivo ') + (b[2] != null && !isNaN(b[2]) ? intIt(b[2]) + ' m' : ''), Y(b) > 30)}</svg>`;
+}
+
+/** GPX (es. esportato da Zepp) → traccia compatta, km, dislivello, quota max. */
+function leggiGpx(testo) {
+  const doc = new DOMParser().parseFromString(testo, 'application/xml');
+  const pt = $$('trkpt, rtept', doc).map(e => [Number(e.getAttribute('lat')), Number(e.getAttribute('lon')), Number((e.querySelector('ele') || {}).textContent)]);
+  if (pt.length < 2) throw new Error('nessun punto nel GPX');
+  let km = 0, su = 0, max = -1e9, prec = NaN;
+  pt.forEach((x, i) => {
+    if (i) km += metri(pt[i - 1], x) / 1000;
+    if (!isNaN(x[2])) { max = Math.max(max, x[2]); if (!isNaN(prec) && x[2] - prec > 2) su += x[2] - prec; if (isNaN(prec) || Math.abs(x[2] - prec) > 2) prec = x[2]; }
+  });
+  const passo = Math.max(1, Math.ceil(pt.length / 400));
+  const t = pt.filter((x, i) => i % passo === 0 || i === pt.length - 1).map(x => x[0].toFixed(5) + ',' + x[1].toFixed(5) + (isNaN(x[2]) ? '' : ',' + Math.round(x[2]))).join(';');
+  return { traccia: t, km: Math.round(km * 10) / 10, dislivello: Math.round(su), quota: max > -1e8 ? Math.round(max) : '', partenza: pt[0][0].toFixed(5) + ',' + pt[0][1].toFixed(5) };
+}
+
+/** Foto ridotta a 1600 px (JPEG) prima dell'invio a Drive. */
+function riduciFoto(file) {
+  return new Promise((ok, ko) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      ok(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => ko(new Error('immagine non leggibile'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function vistaUscita(main, query) {
+  const tutte = usciteTutte().filter(u => tipoUscita(u) !== 'non conta');
+  let i = tutte.findIndex(u => u.ID === (query && query.get('id')));
+  if (i < 0) i = 0;
+  const u = tutte[i];
+  if (!u) { main.innerHTML = `<div class="testata"><h1>Uscita</h1></div>${schedeFuori('uscita')}<p class="piccolo">Nessuna uscita ancora.</p>`; return; }
+  const tipo = tipoUscita(u), volo = tipo === 'volo', t = TIPI_FUORI[tipo] || { icona: '•', nome: 'Da classificare' };
+  const vai = j => `#/uscita?id=${encodeURIComponent(tutte[j].ID)}`;
+  main.innerHTML = `
+    <div class="testata"><h1>Uscita</h1><span class="frecce">${i < tutte.length - 1 ? `<a class="chip" href="${vai(i + 1)}" aria-label="precedente">◀</a>` : ''}${i > 0 ? `<a class="chip" href="${vai(i - 1)}" aria-label="successiva">▶</a>` : ''}</span></div>
+    ${schedeFuori('uscita')}
+    <div id="us-traccia" class="carta" style="padding:6px"><p class="piccolo" style="padding:8px">Carico la traccia…</p></div>
+    <div class="carta" style="margin-top:12px">
+      <div class="budget-testa"><strong class="grande">${t.icona} ${esc(u.Nome || t.nome)} · ${dataBreve(u.Data)}</strong></div>
+      <p class="piccolo" id="us-decollo">${volo ? (u.Decollo ? 'decollo: <strong>' + esc(u.Decollo) + '</strong>' : 'cerco il decollo…') : esc(t.nome)}</p>
+      <div class="griglia-3 fuori-tot">
+        <div><div class="piccolo">${volo ? 'in aria' : 'durata'}</div><div class="grande num">${oreMinuti(u['Durata (min)'])}</div></div>
+        <div><div class="piccolo">quota max</div><div class="grande num">${n(u['Quota max (m)']) ? intIt(u['Quota max (m)']) + ' m' : '—'}</div></div>
+        <div><div class="piccolo">${volo ? 'salita max' : 'dislivello'}</div><div class="grande num">${volo ? (n(u['Salita max (m/s)']) ? '+' + num1.format(n(u['Salita max (m/s)'])) + ' m/s' : '—') : (n(u['Dislivello (m)']) ? intIt(u['Dislivello (m)']) + ' m+' : '—')}</div></div></div>
+      ${n(u.Km) ? `<p class="piccolo">${num1.format(n(u.Km))} km${volo && n(u['Dislivello (m)']) ? ' · ' + intIt(u['Dislivello (m)']) + ' m di salita in termica' : ''}</p>` : ''}
+      <div class="chips"><span class="piccolo">Cambia tipo:</span>${[['volo', '🪂'], ['montagna', '⛰'], ['scalata', '🧗'], ['neve', '❄'], ['bici', '🚵'], ['allenamento', '🏋'], ['non conta', '✕']]
+        .map(x => `<button type="button" class="chip ${tipo === x[0] ? 'attivo' : ''}" data-tipo="${x[0]}" title="${x[0]}">${x[1]}</button>`).join('')}</div>
+    </div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Meteo del giorno</div><p id="us-meteo">${esc(u['Meteo (testo)'] || (u.Partenza ? 'lo ricostruisco dall\'archivio di Open-Meteo…' : 'serve il punto di partenza (dall\'orologio o da un GPX)'))}</p></div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Diario</div>
+      <textarea id="us-diario" rows="4" placeholder="com'è andata…">${esc(u.Diario || '')}</textarea>
+      <label class="campo-riga">👥 Con<input id="us-persone" value="${esc(u.Persone || '')}" placeholder="es. Marco"></label>
+      <div class="chips">
+        <label class="chip">📷 aggiungi foto<input type="file" id="us-foto" accept="image/*" multiple hidden></label>
+        ${u['Foto (link cartella)'] ? `<a class="chip" href="${esc(u['Foto (link cartella)'])}" target="_blank" rel="noopener">📁 foto su Drive</a>` : ''}
+        <label class="chip">🗺 carica GPX<input type="file" id="us-gpx" accept=".gpx,application/gpx+xml" hidden></label>
+        <button type="button" class="chip" id="us-modifica">✎ modifica dati</button></div>
+      <div id="us-form"></div></div>`;
+
+  $$('[data-tipo]', main).forEach(b => { b.onclick = () => { salva('Uscite', { 'Tipo scelto': b.dataset.tipo }, u.ID); toast('Tipo: ' + b.dataset.tipo); vistaUscita(main, query); }; });
+  const salvaTesto = () => salva('Uscite', { Diario: $('#us-diario', main).value, Persone: $('#us-persone', main).value }, u.ID);
+  $('#us-diario', main).onchange = salvaTesto;
+  $('#us-persone', main).onchange = salvaTesto;
+  $('#us-modifica', main).onclick = () => formUscita($('#us-form', main), u, () => vistaUscita(main, query));
+  $('#us-foto', main).onchange = async e => {
+    for (const f of e.target.files) {
+      try { toast('Invio ' + f.name + '…'); const r = await api('fotoUscita', { id: u.ID, nome: f.name.replace(/\.[^.]+$/, '') + '.jpg', immagine: await riduciFoto(f) });
+        applicaLocale({ scheda: 'Uscite', tipo: 'salva', id: u.ID, modificato: new Date().toISOString(), valori: { 'Foto (link cartella)': r.cartella } }); persisti(); toast('Foto salvata su Drive'); }
+      catch (err) { toast('Foto non inviata: ' + (err.message || err)); }
+    }
+    vistaUscita(main, query);
+  };
+  $('#us-gpx', main).onchange = async e => {
+    try {
+      const g = leggiGpx(await e.target.files[0].text());
+      LS.set('traccia:' + u.ID, g.traccia);
+      tracce[u.ID] = g.traccia;
+      salva('Uscite', { Traccia: g.traccia, Km: u.Km || g.km, 'Dislivello (m)': u['Dislivello (m)'] || g.dislivello, 'Quota max (m)': u['Quota max (m)'] || g.quota, Partenza: u.Partenza || g.partenza }, u.ID);
+      toast('Traccia caricata');
+      vistaUscita(main, query);
+    } catch (err) { toast('GPX non letto: ' + (err.message || err)); }
+  };
+
+  caricaTraccia(u).then(t => {
+    const box = $('#us-traccia', main);
+    if (box) box.innerHTML = t ? svgTraccia(t, volo) : '<p class="piccolo" style="padding:8px">Nessuna traccia GPS (Zepp non l\'ha inviata a Connessione Salute): carica il GPX esportato da Zepp.</p>';
+  });
+  if (volo && !u.Decollo && u.Partenza) {
+    decolloVicino(u.Partenza).then(d => {
+      const el = $('#us-decollo', main);
+      if (!el) return;
+      if (!d) { el.textContent = 'decollo non riconosciuto (nessun decollo noto entro 300 m)'; return; }
+      el.innerHTML = `decollo riconosciuto: <strong>${esc(d.nome)}</strong>${d.orient ? ' · orientato ' + esc(d.orient) : ''}`;
+      salva('Uscite', { Decollo: d.nome + (d.orient ? ' ' + d.orient : '') }, u.ID);
+    });
+  }
+  if (!u['Meteo (testo)'] && u.Partenza) {
+    meteoDelGiorno(Object.assign({ Inizio: (righe('Attività').find(a => a.ID === u['ID attività']) || {}).Inizio }, u)).then(m => {
+      const el = $('#us-meteo', main);
+      if (el) el.textContent = m || 'meteo non disponibile';
+      if (m) salva('Uscite', { 'Meteo (testo)': m }, u.ID);
+    }).catch(() => { const el = $('#us-meteo', main); if (el) el.textContent = 'meteo non disponibile (serve la rete)'; });
+  }
+}
+
+function vistaAnnoFuori(main, query) {
+  const anno = (query && query.get('anno')) || String(new Date().getFullYear());
+  const anni = [...new Set(usciteTutte().map(u => u.Data.slice(0, 4)).concat([anno]))].sort().reverse();
+  const dell = usciteFuori().filter(u => u.Data.slice(0, 4) === anno);
+  const perMese = Array.from({ length: 12 }, () => ({ m: 0, v: 0 }));
+  dell.forEach(u => { const k = Number(u.Data.slice(5, 7)) - 1; if (tipoUscita(u) === 'volo') perMese[k].v++; else perMese[k].m++; });
+  const max = Math.max(1, ...perMese.map(x => Math.max(x.m, x.v)));
+  const W = 340, H = 120, bw = W / 12;
+  const voli = dell.filter(u => tipoUscita(u) === 'volo');
+  const dec = {};
+  voli.forEach(u => { const k = String(u.Decollo || 'decollo sconosciuto').replace(/\s+(N|NE|E|SE|S|SO|SW|O|W|NO|NW)([\s/;-].*)?$/, ''); dec[k] = dec[k] || { n: 0, min: 0 }; dec[k].n++; dec[k].min += n(u['Durata (min)']); });
+  const piu = Object.keys(dec).sort((a, b) => dec[b].n - dec[a].n || dec[b].min - dec[a].min).slice(0, 6);
+  const lungo = voli.slice().sort((a, b) => n(b['Durata (min)']) - n(a['Durata (min)']))[0];
+  const alto = dell.slice().sort((a, b) => n(b['Quota max (m)']) - n(a['Quota max (m)']))[0];
+  const duro = dell.filter(u => tipoUscita(u) !== 'volo').sort((a, b) => n(b['Dislivello (m)']) - n(a['Dislivello (m)']))[0];
+  main.innerHTML = `
+    <div class="testata"><h1>Anno</h1><select id="an-anno" class="cat-riga">${anni.map(a => `<option ${a === anno ? 'selected' : ''}>${a}</option>`).join('')}</select></div>
+    ${schedeFuori('anno')}
+    <div class="carta"><div class="etichetta">Uscite per mese · ${anno}</div>
+      <svg class="grafico-bollette" viewBox="0 0 ${W} ${H}" role="img" aria-label="uscite per mese">${perMese.map((x, i) => `
+        <rect x="${i * bw + 4}" y="${H - 18 - (H - 26) * x.m / max}" width="${bw / 2 - 4}" height="${(H - 26) * x.m / max}" rx="2" fill="#7fd4ff"/>
+        <rect x="${i * bw + bw / 2}" y="${H - 18 - (H - 26) * x.v / max}" width="${bw / 2 - 4}" height="${(H - 26) * x.v / max}" rx="2" fill="#6ee7a8"/>
+        <text x="${i * bw + bw / 2}" y="${H - 4}" text-anchor="middle" font-size="10" fill="#9aa0a6">${'GFMAMGLASOND'.charAt(i)}</text>`).join('')}</svg>
+      <p class="piccolo"><span class="quadratino" style="background:#7fd4ff"></span>montagna e altro <span class="quadratino" style="background:#6ee7a8"></span>voli</p></div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Decolli più usati</div>
+      ${piu.map(k => `<div class="budget-testa riga-sottile"><span>${esc(k)}</span><span class="piccolo">${dec[k].n} ${dec[k].n === 1 ? 'volo' : 'voli'} · ${oreMinuti(dec[k].min)}</span></div>`).join('') || '<p class="piccolo">nessun volo</p>'}</div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Record</div>
+      <div class="budget-testa riga-sottile"><span>Volo più lungo</span><strong>${lungo ? oreMinuti(lungo['Durata (min)']) + ' · ' + esc(String(lungo.Decollo || lungo.Nome || '').split(' ')[0] ? lungo.Decollo || lungo.Nome : '') : '—'}</strong></div>
+      <div class="budget-testa riga-sottile"><span>Quota max</span><strong>${alto && n(alto['Quota max (m)']) ? intIt(alto['Quota max (m)']) + ' m' : '—'}</strong></div>
+      <div class="budget-testa riga-sottile"><span>Giro più duro</span><strong>${duro && n(duro['Dislivello (m)']) ? intIt(duro['Dislivello (m)']) + ' m+ · ' + esc(duro.Nome || '') : '—'}</strong></div></div>`;
+  $('#an-anno', main).onchange = e => { location.hash = '#/anno?anno=' + e.target.value; };
+}
+
+/**
+ * "Si vola?" (formato telefono): per ogni località preferita, semaforo del giorno con le stesse soglie della pagina FUORI
+ * (parametri "Volo …"): vento al suolo, raffiche, vento a 1500 m (850 hPa), pioggia; ora volabile solo con la luce
+ * (alba + margine, tramonto − margine) e, se il decollo ha orientamenti, col vento da un settore buono.
+ */
+async function vistaSiVola(main, query) {
+  const giorno = Number((query && query.get('g')) || 0);
+  const pref = preferitiFuori();
+  const nomiG = [0, 1, 2].map(i => { const d = new Date(); d.setDate(d.getDate() + i); return i === 0 ? 'oggi' : i === 1 ? 'domani' : d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric' }); });
+  main.innerHTML = `<div class="testata"><h1>Si vola?</h1><span class="piccolo">Open-Meteo · stima</span></div>${schedeFuori('vola')}
+    <div class="chips">${nomiG.map((x, i) => `<a class="chip ${i === giorno ? 'attivo' : ''}" href="#/vola?g=${i}">${x}</a>`).join('')}</div>
+    <div id="sv-elenco">${pref.length ? '<p class="piccolo">Carico le previsioni…</p>' : '<p class="piccolo">Nessuna località preferita: aggiungile dalla pagina FUORI del tablet (★).</p>'}</div>`;
+  if (!pref.length) return;
+  const sv = numPar('Volo vento medio max (km/h)', 25), sr = numPar('Volo raffiche max (km/h)', 30), s15 = numPar('Volo vento 1500 m max (km/h)', 30);
+  const pPct = numPar('Volo pioggia %', 40), calmo = numPar('Volo vento calmo (km/h)', 5), mAlba = numPar('Volo margine alba (h)', 2), mTram = numPar('Volo margine tramonto (min)', 30);
+  const html = [];
+  for (const p of pref) {
+    try {
+      const chiaveC = 'sivola:' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3);
+      let j = LS.get(chiaveC, null);
+      if (!j || Date.now() - j.alle > 3600e3) {
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&forecast_days=3&timezone=Europe%2FRome` +
+          '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_850hPa,precipitation_probability,precipitation&daily=sunrise,sunset';
+        j = await (await fetch(url)).json();
+        j.alle = Date.now();
+        LS.set(chiaveC, j);
+      }
+      const h = j.hourly, alba = new Date(j.daily.sunrise[giorno]), tram = new Date(j.daily.sunset[giorno]);
+      const orient = {};
+      p.orient.split(',').forEach(x => { const q = x.split(':'); if (q[0]) orient[q[0].trim().toUpperCase().replace('SW', 'SO').replace('NW', 'NO').replace(/^W$/, 'O')] = Number(q[1]) || 0; });
+      const conOr = Object.keys(orient).length > 0;
+      const ore = [];
+      for (let i = 0; i < h.time.length; i++) {
+        const t = new Date(h.time[i]);
+        if (t.toDateString() !== new Date(alba).toDateString()) continue;
+        const luce = t >= new Date(alba.getTime() + mAlba * 3600e3) && t <= new Date(tram.getTime() - mTram * 60e3);
+        if (!luce) continue;
+        const v = h.wind_speed_10m[i], raf = h.wind_gusts_10m[i], v15 = h.wind_speed_850hPa[i], pio = h.precipitation_probability[i] || 0;
+        const sett = ROSA8[Math.round(((h.wind_direction_10m[i] % 360) + 360) % 360 / 45) % 8];
+        let st = v <= sv && raf <= sr && v15 <= s15 ? 2 : v <= sv * 1.2 && raf <= sr * 1.2 && v15 <= s15 * 1.2 ? 1 : 0;
+        if (pio >= pPct || h.precipitation[i] >= numPar('Volo pioggia max (mm/h)', 0.2)) st = 0;
+        if (conOr && v > calmo) st = Math.min(st, orient[sett] === 2 ? 2 : orient[sett] === 1 ? 1 : 0);
+        ore.push({ ora: t.getHours(), st, v: Math.round(v), raf: Math.round(raf), v15: Math.round(v15), sett, pio });
+      }
+      const buone = ore.filter(o => o.st === 2), limite = ore.filter(o => o.st >= 1);
+      const col = buone.length >= 2 ? 'verde' : limite.length >= 2 ? 'giallo' : 'rosso';
+      const fin = (buone.length ? buone : limite);
+      const mezzo = ore[Math.floor(ore.length / 2)] || {};
+      html.push(`<div class="carta sivola" style="margin-top:10px"><div class="budget-testa"><strong>${esc(p.nome)}</strong>
+        <span class="semaforo ${col}">${col === 'verde' ? 'Volabile' : col === 'giallo' ? 'Al limite' : 'No'}</span></div>
+        <p class="piccolo">${fin.length ? 'finestra ' + pad(fin[0].ora) + '–' + pad(fin[fin.length - 1].ora + 1) : 'nessuna finestra'}${conOr ? ' · decollo ' + Object.keys(orient).filter(k => orient[k]).join(' / ') : ''}</p>
+        <div class="ore-volo">${ore.map(o => `<span class="ora-volo st${o.st}" title="${o.ora}h: ${o.v} km/h ${o.sett}, raff. ${o.raf}, 1500 m ${o.v15}, pioggia ${o.pio}%">${o.ora}</span>`).join('')}</div>
+        <p class="piccolo">a metà giornata: vento ${mezzo.v != null ? mezzo.v + ' km/h ' + mezzo.sett + ' · raff. ' + mezzo.raf + ' · 1500 m ' + mezzo.v15 + ' km/h · pioggia ' + mezzo.pio + '%' : '—'}</p></div>`);
+    } catch (e) {
+      html.push(`<div class="carta" style="margin-top:10px"><strong>${esc(p.nome)}</strong><p class="piccolo">previsione non disponibile (serve la rete)</p></div>`);
+    }
+  }
+  const el = $('#sv-elenco', main);
+  if (el) el.innerHTML = html.join('');
+}
+
+// ── Cibo: bilancio e calorie calibrate (dati dello script: dati.fisico) ──
+
+function cartaBilancio(soloCalorie) {
+  const f = dati.fisico || {}, b = f.bilancio, c = f.calorie;
+  let h = '';
+  if (b && !soloCalorie) h += `<div class="carta bordo-verde" style="margin-top:12px"><div class="etichetta">⌚ Bilancio della settimana</div>
+    <div class="budget-testa"><span>mangiate ${intIt(b.mangiate)} − consumate ${intIt(b.consumate)}</span>
+    <strong class="${b.bilancio <= 0 ? 'testo-verde' : 'testo-giallo'}">${b.bilancio > 0 ? '+' : b.bilancio < 0 ? '−' : ''}${intIt(Math.abs(b.bilancio))} kcal</strong></div>
+    <p class="piccolo">≈ ${b.kg > 0 ? '+' : b.kg < 0 ? '−' : ''}${String(Math.abs(b.kg).toFixed(2)).replace('.', ',')} kg (7.700 kcal ≈ 1 kg) · consumo dall'orologio, ${b.giorni} giorni</p></div>`;
+  if (c) h += c.ok ? `<div class="carta" style="margin-top:12px"><div class="etichetta">Calorie · consumo reale</div>
+      <p class="piccolo">dopo ${c.settimane} settimane di pasti, peso e orologio</p>
+      <div class="griglia-3"><div><div class="piccolo">consumi davvero</div><div class="grande num">${intIt(c.reale)}</div><div class="piccolo">kcal/giorno</div></div>
+        <div><div class="piccolo">l'orologio stima</div><div class="grande num">${c.orologio ? intIt(c.orologio) : '—'}</div><div class="piccolo">${c.differenza != null ? (c.differenza > 0 ? '+' : '') + c.differenza + '%' : ''}</div></div>
+        <div><div class="piccolo">ritmo</div><div class="grande num">${c.ritmo > 0 ? '+' : ''}${num1.format(c.ritmo)}</div><div class="piccolo">kg/sett.</div></div></div>
+      <div class="proposta">Per <strong>${c.ritmo > 0 ? '+' : ''}${num1.format(c.ritmo)} kg/sett.</strong> il piano diventa <strong>${intIt(c.proposta)}</strong> kcal/sett. (era ${intIt(c.obiettivo)})</div>
+      <button type="button" class="primario" id="applica-piano">✓ applica al piano</button>
+      <p class="piccolo">non cambia niente da solo: le kcal A/R/L si riscalano in proporzione</p></div>`
+    : `<div class="carta" style="margin-top:12px"><div class="etichetta">Calorie · consumo reale</div>
+      <p>Servono ancora <strong>${c.servono}</strong> ${c.servono === 1 ? 'settimana' : 'settimane'} di pasti e pesate (pasti in ≥ 5 giorni, peso ≥ 2 volte a settimana).</p></div>`;
+  return h;
+}
+
+function collegaBilancio(main, ridisegna) {
+  const b = $('#applica-piano', main);
+  if (!b) return;
+  b.onclick = () => {
+    const c = dati.fisico.calorie, pi = piano();
+    const f = c.proposta / pi.settimana;
+    const valori = { 'Kcal giorno allenamento': Math.round(pi.kcal.A * f / 10) * 10, 'Kcal giorno riposo': Math.round(pi.kcal.R * f / 10) * 10, 'Kcal giorno libero': Math.round(pi.kcal.L * f / 10) * 10 };
+    salvaParametri(valori, 'Piano aggiornato: ' + intIt(c.proposta) + ' kcal/settimana');
+    c.obiettivo = c.proposta;
+    ridisegna();
+  };
+}
+
+function aggiornaBadgeFuori() {
+  const a = $('#nav a[href="#/fuori"]');
+  if (!a) return;
+  const k = daClassificare().length;
+  a.innerHTML = 'Fuori' + (k ? ` <span class="badge">${k}</span>` : '');
+}
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 disegna();
@@ -1999,5 +2477,6 @@ function gruppoNav(nome) {
   if (SCHEDE_FINANZE.some(s => s[0] === nome)) return 'finanze';
   if (SCHEDE_CIBO.some(s => s[0] === nome) || nome === 'dieta') return 'cibo';
   if (SCHEDE_ALL.some(s => s[0] === nome)) return 'allenamento';
+  if (SCHEDE_FUORI.some(s => s[0] === nome)) return 'fuori';
   return nome;
 }
