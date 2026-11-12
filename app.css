@@ -250,3 +250,22 @@ svg.traccia { width: 100%; height: auto; display: block; }
 .ora-volo.st2 { background: rgba(110, 231, 168, .35); }
 .bordo-verde { border: 1px solid rgba(110, 231, 168, .55); }
 .proposta { border: 1px solid var(--giallo); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+/* v9: stelle di "Si vola?" (tocco = il perché) */
+.stelle-volo summary { cursor: pointer; list-style: none; font-size: 13px; margin: 4px 0; }
+.stelle-volo summary::-webkit-details-marker { display: none; }
+.stelle { color: var(--giallo); font-size: 17px; letter-spacing: 1px; }
+.stelle .spente { color: rgba(184, 200, 232, .3); }
+/* v9: Bollette → Dettaglio */
+.sel-periodo { background: var(--superficie); color: inherit; border: 1px solid var(--bordo, #2a4a7a); border-radius: 10px; padding: 6px 10px; font-size: 15px; }
+.dettaglio-bollette li { display: flex; align-items: center; gap: 8px; padding: 7px 0; }
+.dettaglio-bollette .data-riga { width: 46px; flex: none; font-size: 13px; color: var(--testo-2); }
+.dettaglio-bollette .pallino-gruppo { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.dettaglio-bollette .corpo { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip-piccolo { min-height: 26px; font-size: 13px; padding: 2px 10px; }
+/* v9: Scadenze (fatta il, data passata, storico) */
+.campo-check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--testo-2); width: 100%; }
+.campo-check input { width: 20px; height: 20px; }
+.scelta-passato { width: 100%; border: 1px solid var(--giallo); border-radius: 10px; padding: 8px 12px; }
+.pannello-fatta { margin-top: 12px; border: 1px solid var(--accento); }
+.pannello-fatta input[type=date], .data-fatta { background: var(--superficie-2); color: var(--testo); border: 1px solid var(--bordo); border-radius: 8px; padding: 6px 8px; font-size: 15px; }
+.cerca-storico { width: 100%; margin: 8px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bordo); background: var(--superficie); color: var(--testo); font-size: 16px; }

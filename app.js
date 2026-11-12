@@ -147,7 +147,7 @@ async function sincronizza() {
       LS.set('coda', coda);
     }
     const fresco = await api('dati');
-    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server };
+    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server, versione: fresco.versione, batteria: fresco.batteria };
     coda.forEach(applicaLocale); // modifiche fatte durante l'invio
     LS.set('dati', dati);
     statoSync.ultimo = new Date().toISOString();
@@ -273,14 +273,26 @@ function mediaMensile(categoria, mesi) {
   return uscite(da, a, categoria) / mesi;
 }
 
+/**
+ * v9: aperte = scadenze (Tipo vuoto o "Scadenza") non fatte/chiuse; quelle "si chiude da sola" passate vanno nello storico
+ * invece di diventare scadute. storico = fatte, chiuse, eventi registrati e chiuse da sole, dalla più recente
+ * ("quando" = Fatta il, altrimenti la data).
+ */
 function calcScadenze() {
   const entro = numPar('Giorni per "in scadenza"', 7);
   const oggi = oggiK();
-  const aperte = righe('Scadenze')
-    .filter(s => s.Data && normalizza(s.Stato) !== 'chiusa')
-    .map(s => Object.assign({}, s, { giorni: giorniTra(oggi, s.Data) }))
-    .sort((a, b) => a.giorni - b.giorni);
-  return { aperte, entro, prossima: aperte[0] || null, inScadenza: aperte.filter(s => s.giorni <= entro).length, scadute: aperte.filter(s => s.giorni < 0).length };
+  const aperte = [], storico = [];
+  righe('Scadenze').filter(s => s.Data).forEach(s => {
+    const stato = normalizza(s.Stato), evento = normalizza(s.Tipo).indexOf('evento') === 0;
+    const giorni = giorniTra(oggi, s.Data);
+    const daSola = s['Si chiude da sola'] === true && giorni < 0;
+    if (evento || stato === 'chiusa' || stato === 'fatta' || daSola) {
+      storico.push(Object.assign({}, s, { giorni, daSola: daSola && stato !== 'fatta', quando: String(s['Fatta il'] || s.Data).slice(0, 10) }));
+    } else aperte.push(Object.assign({}, s, { giorni }));
+  });
+  aperte.sort((a, b) => a.giorni - b.giorni);
+  storico.sort((a, b) => b.quando.localeCompare(a.quando));
+  return { aperte, storico, entro, prossima: aperte[0] || null, inScadenza: aperte.filter(s => s.giorni <= entro).length, scadute: aperte.filter(s => s.giorni < 0).length };
 }
 
 const GIORNI = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
@@ -800,6 +812,12 @@ async function salvaBudget() {
 
 const COLORI_GRUPPI = ['#f2c14e', '#e8825a', '#ef9b6b', '#4f8fe6', '#9b7fe8', '#5fd3b0', '#6eb8e8', '#d8c060', '#e07a6a'];
 
+/**
+ * v9 (SPEC v9 §5.1, mockup 33): gruppi in alto; sotto, SEMPRE il "Dettaglio" con tutti gli addebiti delle bollette del periodo
+ * scelto (3/6/12/24 mesi): data, gruppo (pallino), descrizione, importo; tocco su una riga = il movimento. Tocco su un gruppo =
+ * il dettaglio si filtra su quel gruppo (secondo tocco o ✕ = tutti). Niente KPI in testa al dettaglio. Gli addebiti sono gli
+ * stessi movimenti dello script (ids per gruppo, analisiBollette_), così tablet e web app filtrano le stesse righe.
+ */
 function vistaBollette(main, query) {
   const casa = dati.casa || {};
   const gruppi = casa.gruppi || [];
@@ -808,39 +826,61 @@ function vistaBollette(main, query) {
       <div class="carta piccolo">Le bollette si ricavano dai Movimenti: compaiono quando lo script del foglio è alla versione 6.</div>`;
     return;
   }
-  const scelto = (query && query.get('gruppo')) || (casa.avviso && casa.avviso.gruppo) || gruppi[0].nome;
-  const g = gruppi.find(x => x.nome === scelto) || gruppi[0];
-  const ig = gruppi.indexOf(g);
-  const varTot = casa.totalePrec > 0 ? (casa.totale - casa.totalePrec) / casa.totalePrec : null;
+  const scelto = (query && query.get('gruppo')) || '';
+  const g = gruppi.find(x => x.nome === scelto) || null;
+  const ig = g ? gruppi.indexOf(g) : -1;
+  const mesiP = Number((query && query.get('mesi')) || LS.get('bolletteMesi', 12)) || 12;
   const varTxt = v => v == null ? '<span class="piccolo">—</span>' : `<span class="${v > 0 ? 'testo-giallo' : 'testo-verde'}">${v > 0 ? '+' : ''}${v}%</span>`;
-  const ctr = (casa.controllo || []).filter(c => !c.errore && [g.nome].concat(g.parole || []).some(p => normalizza(p).indexOf(normalizza(c.fornitore)) >= 0));
-  const mesi = casa.mesi || [];
-  const lettere = mesi.slice(12).map(m => daChiave(m + '-01').toLocaleDateString('it-IT', { month: 'narrow' }));
+  const colore = i => COLORI_GRUPPI[i % COLORI_GRUPPI.length];
+
+  // Dettaglio: movimenti dei gruppi (dagli ids dello script), nel periodo, dal più recente.
+  const daK = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - mesiP + 1); return chiave(d); })();
+  const gruppoDi = {};
+  gruppi.forEach((x, i) => (x.ids || []).forEach(id => { gruppoDi[id] = i; }));
+  const conIds = gruppi.some(x => x.ids);
+  const dett = righe('Movimenti').filter(m => m.Data && m.ID in gruppoDi && String(m.Data) >= daK && (!g || gruppoDi[m.ID] === ig))
+    .sort((a, b) => String(b.Data).localeCompare(String(a.Data)));
 
   main.innerHTML = `
-    <div class="testata"><h1>Bollette</h1><span class="piccolo">ultimi 12 mesi</span></div>
+    <div class="testata"><h1>Bollette</h1>
+      <select id="bo-mesi" class="sel-periodo">${[3, 6, 12, 24].map(m => `<option value="${m}" ${m === mesiP ? 'selected' : ''}>${m} mesi</option>`).join('')}</select></div>
     ${schedeFinanze('bollette')}
     <div class="carta">
-      <div class="etichetta">Totale utenze · ${euro0.format(casa.totale)}</div>
-      <p class="piccolo" style="margin:0 0 6px">vs 12 mesi prima ${varTot == null ? '—' : varTxt(Math.round(varTot * 100))} · dai movimenti, niente da inserire</p>
+      <div class="etichetta">Gruppi · 12 mesi</div>
       <ul class="elenco gruppi">${gruppi.map((x, i) => `<li class="toccabile ${x === g ? 'selezionato' : ''}" data-gruppo="${esc(x.nome)}">
-        <span class="quadratino" style="background:${COLORI_GRUPPI[i % COLORI_GRUPPI.length]}"></span>
+        <span class="quadratino" style="background:${colore(i)}"></span>
         <div class="corpo">${esc(x.nome)}<div class="sotto">${esc(x.frequenza || '')}${x.quota != null ? ' · ' + x.quota + '%' : ''}</div></div>
         <div class="num">${euro0.format(x.totale)} ${varTxt(x.variazione)}</div></li>`).join('')}</ul>
     </div>
     <div class="carta" style="margin-top:12px">
-      <div class="etichetta">${esc(g.nome)} · mese per mese</div>
-      <p class="piccolo" style="margin:0"><span class="quadratino" style="background:${COLORI_GRUPPI[ig % COLORI_GRUPPI.length]}"></span> quest'anno
-        <span class="quadratino" style="background:#5a6b8c"></span> anno prima · tocca un gruppo sopra</p>
-      ${graficoBollette(g.mesi || [], lettere, COLORI_GRUPPI[ig % COLORI_GRUPPI.length])}
-      <div class="budget-testa"><span>Ultima bolletta</span><strong class="num ${g.scarto >= 20 ? 'testo-giallo' : ''}">${g.ultima ? euro0.format(g.ultima.importo) + ' · ' + dataBreve(g.ultima.data) : '—'}${g.scarto != null ? ' · ' + (g.scarto > 0 ? '+' : '') + g.scarto + '% vs media' : ''}</strong></div>
-      <div class="budget-testa"><span>Media per bolletta</span><strong class="num">${g.media != null ? euro0.format(g.media) : '—'}</strong></div>
-      <div class="budget-testa"><span>Frequenza · prossima</span><strong>${esc(g.frequenza || '—')}${g.prossima ? ' · ~' + dataBreve(g.prossima) : ''}</strong></div>
-      <div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
-        : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>
+      <div class="budget-testa"><div class="etichetta" style="margin:0">Dettaglio</div>
+        ${g ? `<button class="chip chip-giallo chip-piccolo" id="bo-togli">⚡ ${esc(g.nome)} ✕</button>` : '<span class="piccolo">tutte · tocca un gruppo per filtrare</span>'}</div>
+      ${!conIds ? '<p class="piccolo">Il dettaglio compare con lo script del foglio alla versione 9.</p>'
+        : dett.length ? `<ul class="elenco dettaglio-bollette">${dett.map(m => `<li class="toccabile" data-mov="${esc(m.ID)}">
+          <span class="data-riga">${daChiave(m.Data).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</span>
+          <span class="pallino-gruppo" style="background:${colore(gruppoDi[m.ID])}"></span>
+          <div class="corpo">${esc(m.Descrizione || '')}</div>
+          <div class="num">${euro.format(Math.abs(n(m['Importo (uscite negative)'])))}</div></li>`).join('')}</ul>`
+        : `<p class="piccolo">Nessun addebito${g ? ' ' + esc(g.nome) : ''} negli ultimi ${mesiP} mesi.</p>`}
     </div>
-    <p class="piccolo">Gruppi e parole chiave: parametro "Gruppi bollette" nel foglio. Ogni gruppo somma i movimenti del mese (es. le due ricariche Iliad).</p>`;
-  $$('[data-gruppo]', main).forEach(li => { li.onclick = () => { location.hash = '#/bollette?gruppo=' + encodeURIComponent(li.dataset.gruppo); }; });
+    ${g ? `<div class="carta" style="margin-top:12px">
+      <div class="etichetta">${esc(g.nome)} · mese per mese</div>
+      <p class="piccolo" style="margin:0"><span class="quadratino" style="background:${colore(ig)}"></span> quest'anno
+        <span class="quadratino" style="background:#5a6b8c"></span> anno prima</p>
+      ${graficoBollette(g.mesi || [], (casa.mesi || []).slice(12).map(m => daChiave(m + '-01').toLocaleDateString('it-IT', { month: 'narrow' })), colore(ig))}
+      <div class="budget-testa"><span>Ultima bolletta</span><strong class="num ${g.scarto >= 20 ? 'testo-giallo' : ''}">${g.ultima ? euro0.format(g.ultima.importo) + ' · ' + dataBreve(g.ultima.data) : '—'}${g.scarto != null ? ' · ' + (g.scarto > 0 ? '+' : '') + g.scarto + '% vs media' : ''}</strong></div>
+      <div class="budget-testa"><span>Frequenza · prossima</span><strong>${esc(g.frequenza || '—')}${g.prossima ? ' · ~' + dataBreve(g.prossima) : ''}</strong></div>
+      ${(() => { const ctr = (casa.controllo || []).filter(c => !c.errore && [g.nome].concat(g.parole || []).some(p => normalizza(p).indexOf(normalizza(c.fornitore)) >= 0));
+        return `<div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
+          : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>`; })()}
+    </div>` : ''}
+    <p class="piccolo">Gruppi e parole chiave: parametro "Gruppi bollette" nel foglio. Ogni gruppo somma i movimenti del mese.</p>`;
+  const vai = (gr, m) => { location.hash = '#/bollette?' + new URLSearchParams(Object.assign(gr ? { gruppo: gr } : {}, { mesi: m || mesiP })).toString(); };
+  $$('[data-gruppo]', main).forEach(li => { li.onclick = () => vai(li.dataset.gruppo === scelto ? '' : li.dataset.gruppo); });
+  $$('[data-mov]', main).forEach(li => { li.onclick = () => { location.hash = '#/movimenti?id=' + encodeURIComponent(li.dataset.mov); }; });
+  const tg = $('#bo-togli', main);
+  if (tg) tg.onclick = () => vai('');
+  $('#bo-mesi', main).onchange = e => { LS.set('bolletteMesi', Number(e.target.value)); vai(scelto, e.target.value); };
 }
 
 /** Barre mese per mese: ultimi 12 mesi (colore) accanto agli stessi mesi dell'anno prima (grigio). */
@@ -999,68 +1039,176 @@ function collegaElimina(main, scheda, conferma) {
 
 // Scadenze ────────────────────────────
 
-const RICORRENZE = { 'Nessuna': 0, 'Mensile': 1, 'Trimestrale': 3, 'Semestrale': 6, 'Annuale': 12 };
+const RICORRENZE = { 'Nessuna': 0, 'Mensile': 1, 'Bimestrale': 2, 'Trimestrale': 3, 'Semestrale': 6, 'Annuale': 12 };
 
+/** "ven 12 nov 2027" */
+function dataAnno(k) { return daChiave(k).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }); }
+
+/** Prossima data di una ricorrenza: stesso giorno N mesi dopo (fine mese se il giorno non esiste, es. 31 → 30). */
+function prossimaRicorrenza(k, mesi) {
+  const d = daChiave(k);
+  const ultimo = new Date(d.getFullYear(), d.getMonth() + mesi + 1, 0).getDate();
+  return chiave(new Date(d.getFullYear(), d.getMonth() + mesi, Math.min(d.getDate(), ultimo)));
+}
+
+/**
+ * v9 (SPEC v9 §5.2): Scadenze con le schede Prossime | Storico.
+ * - "✓ fatta" apre il selettore "Fatta il" (oggi già scelto, ieri o una data qualsiasi): Stato "Fatta" + colonna "Fatta il",
+ *   la scadenza passa da sola nello Storico. Con la Ricorrenza la prossima la crea lo script (v9) dalla data in cui è stata
+ *   davvero fatta, o dalla data prevista se "Giorno fisso"; con lo script vecchio la crea la web app come prima.
+ * - Data passata nel modulo: "Promemoria scaduto o evento da registrare?" (Tipo "Evento registrato" = Storico, niente Calendar).
+ * - "Si chiude da sola": passata la data va nello Storico senza diventare scaduta.
+ * - Storico: per data decrescente, filtro per categoria, ricerca nel titolo, per categoria "ultimo: … · in media ogni …";
+ *   la data "Fatta il" si cambia toccandola.
+ * - Dal tablet: #/scadenze?fatta=<ID> apre subito il selettore per quella scadenza.
+ */
 function vistaScadenze(main, query) {
   const s = calcScadenze();
   const limite = 30;
-  // Filtro per categoria (es. #/scadenze?categoria=Casa per manutenzioni e scadenze di casa).
+  const vista = (query && query.get('vista')) === 'storico' ? 'storico' : 'prossime';
   const filtro = (query && query.get('categoria')) || '';
-  const categorie = ['Casa'].concat(s.aperte.map(x => String(x.Categoria || '').trim()).filter(Boolean))
+  const tutte = s.aperte.concat(s.storico);
+  const categorie = ['Casa'].concat(tutte.map(x => String(x.Categoria || '').trim()).filter(Boolean))
     .filter((c, i, a) => a.findIndex(y => normalizza(y) === normalizza(c)) === i);
+  const link = (v, c) => '#/scadenze?' + new URLSearchParams(Object.assign(v === 'storico' ? { vista: 'storico' } : {}, c ? { categoria: c } : {})).toString();
+  const testa = `<div class="testata"><h1>Scadenze</h1></div>
+    <nav class="schede-fin"><a href="${link('prossime', filtro)}" class="${vista === 'prossime' ? 'attiva' : ''}">Prossime</a><a href="${link('storico', filtro)}" class="${vista === 'storico' ? 'attiva' : ''}">Storico</a></nav>
+    <div class="azioni"><a class="bottone ${filtro ? '' : 'primario'}" href="${link(vista, '')}">Tutte</a>${categorie.map(c => `<a class="bottone ${normalizza(c) === normalizza(filtro) ? 'primario' : ''}" href="${link(vista, c)}">${esc(c)}</a>`).join('')}</div>`;
+  if (vista === 'storico') return vistaStoricoScadenze(main, query, s, testa, filtro);
+
   const scelte = filtro ? s.aperte.filter(x => normalizza(x.Categoria) === normalizza(filtro)) : s.aperte;
   const vicine = scelte.filter(x => x.giorni <= limite);
   const lontane = scelte.filter(x => x.giorni > limite);
   const riga = x => `<li>
-    <div class="corpo"><div>${esc(x.Titolo)}</div><div class="sotto">${dataBreve(x.Data)} · ${testoGiorni(x.giorni)}${x.Categoria ? ' · ' + esc(x.Categoria) : ''}${x.Ricorrenza && x.Ricorrenza !== 'Nessuna' ? ' · ' + esc(x.Ricorrenza) : ''}</div></div>
-    <button class="piccolo-b" data-chiudi="${esc(x.ID)}">Fatta</button></li>`;
+    <div class="corpo"><div>${esc(x.Titolo)}</div><div class="sotto">${dataBreve(x.Data)} · ${testoGiorni(x.giorni)}${x.Categoria ? ' · ' + esc(x.Categoria) : ''}${x.Ricorrenza && x.Ricorrenza !== 'Nessuna' ? ' · ' + esc(x.Ricorrenza) : ''}${x['Si chiude da sola'] === true ? ' · si chiude da sola' : ''}${x['ID evento'] ? ' · 📅' : ''}</div></div>
+    <button class="piccolo-b" data-fatta="${esc(x.ID)}">✓ fatta</button></li>`;
 
-  main.innerHTML = `
-    <h1>Scadenze</h1>
-    <div class="azioni"><a class="bottone ${filtro ? '' : 'primario'}" href="#/scadenze">Tutte</a>${categorie.map(c => `<a class="bottone ${normalizza(c) === normalizza(filtro) ? 'primario' : ''}" href="#/scadenze?categoria=${encodeURIComponent(c)}">${esc(c)}</a>`).join('')}</div>
+  main.innerHTML = `${testa}
     <h2>Prossimi ${limite} giorni</h2>
     <ul class="elenco carta">${vicine.length ? vicine.map(riga).join('') : '<li class="vuoto">Niente in scadenza.</li>'}</ul>
     ${lontane.length ? `<h2>Più avanti</h2><ul class="elenco carta">${lontane.map(riga).join('')}</ul>` : ''}
+    <div id="pannello-fatta" class="carta pannello-fatta" hidden></div>
     <h2>Nuova scadenza</h2>
     <form class="modulo carta" id="f-scad">
       <label class="campo largo">Cosa<input name="titolo" required></label>
       <label class="campo">Data<input name="data" type="date" value="${oggiK()}" required></label>
       <label class="campo">Categoria<input name="categoria" list="cat-scad" placeholder="es. Casa, Auto" value="${esc(filtro)}"><datalist id="cat-scad">${categorie.map(c => `<option value="${esc(c)}">`).join('')}</datalist></label>
       <label class="campo">Ricorrenza<select name="ricorrenza">${Object.keys(RICORRENZE).map(r => `<option>${r}</option>`).join('')}</select></label>
-      <label class="campo">Preavviso (giorni)<input name="preavviso" type="number" min="0" value="${s.entro}"></label>
+      <label class="campo">Preavviso (giorni)<input name="preavviso" type="number" min="0" max="28" value="${s.entro}"></label>
+      <label class="campo-check"><input type="checkbox" name="dasola"> si chiude da sola (appuntamenti, eventi senza azione)</label>
+      <label class="campo-check"><input type="checkbox" name="fisso"> giorno fisso: la prossima dalla data prevista, non da quando è fatta</label>
+      <input type="hidden" name="tipo" value="">
+      <div id="scelta-passato" class="scelta-passato" hidden>
+        <p>La data è passata: <strong>promemoria scaduto o evento da registrare?</strong></p>
+        <div class="azioni"><button type="button" class="bottone" data-tipo="Scadenza">Promemoria scaduto</button>
+          <button type="button" class="bottone primario" data-tipo="Evento registrato">Evento da registrare (storico)</button></div>
+      </div>
       <button class="primario" type="submit">Aggiungi</button>
     </form>
+    <p class="piccolo">Le scadenze future vanno anche nel Google Calendar (promemoria ai giorni di preavviso e il giorno stesso) quando lo script del foglio è alla versione 9.</p>
     ${bottonePenna('Scadenze')}`;
 
-  $('#f-scad').onsubmit = e => {
+  const form = $('#f-scad');
+  form.onsubmit = e => {
     e.preventDefault();
-    const fd = new FormData(e.target);
+    const fd = new FormData(form);
+    const passata = fd.get('data') < oggiK();
+    if (passata && !fd.get('tipo')) { $('#scelta-passato').hidden = false; $('#scelta-passato').scrollIntoView({ block: 'center' }); return; }
+    const evento = fd.get('tipo') === 'Evento registrato';
     salva('Scadenze', {
       'Data': fd.get('data'), 'Titolo': fd.get('titolo'), 'Categoria': fd.get('categoria'),
-      'Ricorrenza': fd.get('ricorrenza'), 'Giorni di preavviso': fd.get('preavviso'), 'Stato': 'Aperta',
+      'Ricorrenza': evento ? 'Nessuna' : fd.get('ricorrenza'), 'Giorni di preavviso': fd.get('preavviso'),
+      'Stato': evento ? 'Fatta' : 'Aperta', 'Tipo': evento ? 'Evento registrato' : 'Scadenza', 'Fatta il': evento ? fd.get('data') : '',
+      'Si chiude da sola': !!fd.get('dasola'), 'Giorno fisso': !!fd.get('fisso'),
     });
-    toast('Scadenza aggiunta');
+    toast(evento ? 'Evento registrato nello storico' : 'Scadenza aggiunta');
     disegna();
   };
-  $$('[data-chiudi]', main).forEach(b => {
-    b.onclick = () => {
-      const x = s.aperte.find(y => y.ID === b.dataset.chiudi);
-      salva('Scadenze', { 'Stato': 'Chiusa' }, x.ID);
+  $$('[data-tipo]', form).forEach(b => { b.onclick = () => { form.tipo.value = b.dataset.tipo; form.requestSubmit ? form.requestSubmit() : form.onsubmit(new Event('submit')); }; });
+  form.data.onchange = () => { form.tipo.value = ''; $('#scelta-passato').hidden = true; };
+
+  const apriFatta = id => {
+    const x = s.aperte.find(y => y.ID === id);
+    if (!x) return;
+    const p = $('#pannello-fatta');
+    const ieri = spostaGiorni(oggiK(), -1);
+    p.hidden = false;
+    p.innerHTML = `<div class="etichetta">✓ ${esc(x.Titolo)} · fatta il</div>
+      <div class="chips"><button class="chip attivo" data-quando="${oggiK()}">oggi</button><button class="chip" data-quando="${ieri}">ieri</button>
+        <input type="date" id="fatta-data" value="${oggiK()}" max="${oggiK()}"></div>
+      ${RICORRENZE[x.Ricorrenza] ? `<p class="piccolo" id="fatta-prossima"></p>` : ''}
+      <div class="azioni"><button class="bottone" id="fatta-annulla">Annulla</button><button class="bottone primario" id="fatta-ok">Conferma</button></div>`;
+    const inp = $('#fatta-data', p);
+    const mostraProssima = () => {
+      const pr = $('#fatta-prossima', p);
+      if (pr) pr.textContent = 'Prossima: ' + dataAnno(prossimaRicorrenza(x['Giorno fisso'] === true ? x.Data : inp.value, RICORRENZE[x.Ricorrenza]))
+        + (x['Giorno fisso'] === true ? ' (dalla data prevista)' : ' (da quando è stata fatta)');
+    };
+    $$('[data-quando]', p).forEach(b => { b.onclick = () => { inp.value = b.dataset.quando; $$('[data-quando]', p).forEach(c => c.classList.toggle('attivo', c === b)); mostraProssima(); }; });
+    inp.onchange = () => { $$('[data-quando]', p).forEach(c => c.classList.toggle('attivo', c.dataset.quando === inp.value)); mostraProssima(); };
+    mostraProssima();
+    $('#fatta-annulla', p).onclick = () => { p.hidden = true; };
+    $('#fatta-ok', p).onclick = () => {
+      const quando = inp.value || oggiK();
+      salva('Scadenze', { 'Stato': 'Fatta', 'Fatta il': quando }, x.ID);
       const mesi = RICORRENZE[x.Ricorrenza] || 0;
-      if (mesi) {
-        const d = daChiave(x.Data);
-        const prossima = chiave(new Date(d.getFullYear(), d.getMonth() + mesi, d.getDate()));
+      if (mesi && !(dati.versione >= 9)) {
+        // Script vecchio: la prossima la crea la web app (con la v9 la crea lo script, insieme all'evento nel calendario).
         salva('Scadenze', {
-          'Data': prossima, 'Titolo': x.Titolo, 'Categoria': x.Categoria || '', 'Ricorrenza': x.Ricorrenza,
-          'Giorni di preavviso': x['Giorni di preavviso'] || '', 'Stato': 'Aperta',
+          'Data': prossimaRicorrenza(x['Giorno fisso'] === true ? x.Data : quando, mesi), 'Titolo': x.Titolo, 'Categoria': x.Categoria || '',
+          'Ricorrenza': x.Ricorrenza, 'Giorni di preavviso': x['Giorni di preavviso'] || '', 'Stato': 'Aperta',
         });
-        toast('Fatta. Prossima: ' + dataBreve(prossima));
-      } else toast('Fatta');
+      }
+      toast(mesi ? 'Fatta. Prossima: ' + dataAnno(prossimaRicorrenza(x['Giorno fisso'] === true ? x.Data : quando, mesi)) : 'Fatta: è nello storico');
       disegna();
     };
-  });
+    p.scrollIntoView({ block: 'center' });
+  };
+  $$('[data-fatta]', main).forEach(b => { b.onclick = () => apriFatta(b.dataset.fatta); });
+  if (query && query.get('fatta')) setTimeout(() => apriFatta(query.get('fatta')), 0);
   // Dal tasto ＋ della striscia "Prossima scadenza" sul tablet: #/scadenze?nuova=1.
   if (query && query.get('nuova')) setTimeout(() => { const f = $('#f-scad', main); f.scrollIntoView(); const i = $('input', f); if (i) i.focus(); }, 0);
+}
+
+/** "3 mesi fa", "12 giorni fa", "oggi". */
+function tempoFa(k) {
+  const g = giorniTra(k, oggiK());
+  if (g <= 0) return 'oggi';
+  if (g < 45) return g + (g === 1 ? ' giorno fa' : ' giorni fa');
+  const m = Math.round(g / 30.4);
+  return m < 18 ? m + (m === 1 ? ' mese fa' : ' mesi fa') : Math.round(g / 365) + ' anni fa';
+}
+
+function ogniQuanto(giorni) {
+  if (giorni < 45) return 'ogni ' + Math.round(giorni) + ' giorni';
+  const m = Math.round(giorni / 30.4);
+  return m < 18 ? 'ogni ' + m + (m === 1 ? ' mese' : ' mesi') : 'ogni ' + num1.format(giorni / 365) + ' anni';
+}
+
+function vistaStoricoScadenze(main, query, s, testa, filtro) {
+  const cerca = (query && query.get('q')) || '';
+  const st = s.storico.filter(x => (!filtro || normalizza(x.Categoria) === normalizza(filtro)) && (!cerca || normalizza(x.Titolo).indexOf(normalizza(cerca)) >= 0));
+  // Per categoria: ultimo e frequenza media (dalle date distinte, dalla più vecchia).
+  const perCat = {};
+  st.forEach(x => { const c = String(x.Categoria || '').trim() || 'Senza categoria'; (perCat[c] = perCat[c] || []).push(x.quando); });
+  const riass = Object.keys(perCat).map(c => {
+    const d = perCat[c].slice().sort();
+    const media = d.length >= 2 ? giorniTra(d[0], d[d.length - 1]) / (d.length - 1) : null;
+    return `<li><div class="corpo"><div>${esc(c)} <span class="piccolo">· ${d.length}</span></div><div class="sotto">ultimo: ${tempoFa(d[d.length - 1])}${media ? ' · in media ' + ogniQuanto(media) : ''}</div></div></li>`;
+  });
+  main.innerHTML = `${testa}
+    <input type="search" id="st-cerca" class="cerca-storico" placeholder="Cerca nel titolo (es. amministratore)" value="${esc(cerca)}">
+    ${riass.length ? `<h2>Ogni quanto succede</h2><ul class="elenco carta">${riass.join('')}</ul>` : ''}
+    <h2>Storico</h2>
+    <ul class="elenco carta">${st.length ? st.map(x => `<li>
+      <div class="corpo"><div>${esc(x.Titolo)}</div><div class="sotto">${x.Categoria ? esc(x.Categoria) + ' · ' : ''}${normalizza(x.Tipo).indexOf('evento') === 0 ? 'evento registrato' : x.daSola ? 'chiusa da sola' : 'prevista ' + dataBreve(x.Data)}</div></div>
+      ${normalizza(x.Tipo).indexOf('evento') === 0 || x.daSola ? `<span class="num">${dataBreve(x.quando)}</span>`
+        : `<input type="date" class="data-fatta" data-id="${esc(x.ID)}" value="${esc(x.quando)}" max="${oggiK()}" title="Fatta il (tocca per cambiarla)">`}</li>`).join('')
+      : '<li class="vuoto">Niente nello storico' + (cerca ? ' per "' + esc(cerca) + '"' : '') + '.</li>'}</ul>
+    <p class="piccolo">Ci finiscono le scadenze fatte (✓ fatta), gli eventi registrati e quelle che si chiudono da sole. La data di "fatta il" si cambia toccandola.</p>`;
+  const inp = $('#st-cerca', main);
+  inp.onchange = () => { location.hash = '#/scadenze?' + new URLSearchParams(Object.assign({ vista: 'storico' }, filtro ? { categoria: filtro } : {}, inp.value ? { q: inp.value } : {})).toString(); };
+  $$('.data-fatta', main).forEach(i => { i.onchange = () => { if (i.value) { salva('Scadenze', { 'Fatta il': i.value }, i.dataset.id); toast('Data aggiornata'); } }; });
 }
 
 // Spesa ────────────────────────────
@@ -1408,8 +1556,22 @@ function vistaProgressi(main, query) {
         <span class="${delta > 0 ? 'testo-verde' : 'piccolo'}">${delta ? (delta > 0 ? '+' : '') + num1.format(delta) + ' kg in 8 sett.' : ''}</span></div>
       <svg class="grafico-bollette" viewBox="0 0 ${W} ${H}" role="img" aria-label="Carico per settimana">${puntiKg ? `<polyline points="${puntiKg}" fill="none" stroke="var(--verde)" stroke-width="2.5"/>` : '<text x="10" y="60" font-size="12" fill="#9aa0a6">nessun carico segnato</text>'}</svg>
       <div class="budget-testa"><span>Record</span><strong>${rec ? esc(rec['Peso (kg)']) + ' kg × ' + esc(rec.Ripetizioni) + ' · ' + dataBreve(rec.Data) : '—'}</strong></div>
-      <div class="budget-testa"><span>Fermo da ${fermo ? fermo.sett + ' settimane' : '—'}</span><strong class="testo-giallo">${fermo ? esc(fermo.nome) + ' ' + num1.format(fermo.kg) + ' kg' : ''}</strong></div></div>`;
+      <div class="budget-testa"><span>Fermo da ${fermo ? fermo.sett + ' settimane' : '—'}</span><strong class="testo-giallo">${fermo ? esc(fermo.nome) + ' ' + num1.format(fermo.kg) + ' kg' : ''}</strong></div></div>
+    ${rigaBatteria()}`;
   $('#pr-es', main).onchange = e => { location.hash = '#/progressi?es=' + encodeURIComponent(e.target.value); };
+}
+
+/**
+ * v9 (SPEC v9 §5.4): batteria dell'orologio letta dalla mini app a ogni apertura → consumo medio al giorno (solo i cali tra
+ * due letture, le ricariche non contano). Normale per il T-Rex 3 Pro: ~3–5 %/giorno (3–4 settimane di autonomia).
+ */
+function rigaBatteria() {
+  const b = dati.batteria;
+  if (!b) return `<p class="piccolo" style="margin-top:12px">⌚ Batteria orologio: arriva aprendo Allenamento sull'orologio (script v9, mini app 1.1).</p>`;
+  const q = new Date(b.quando);
+  return `<div class="carta" style="margin-top:12px"><div class="budget-testa"><span>⌚ Batteria orologio</span>
+    <strong class="num ${b.consumoGiorno > 6 ? 'testo-giallo' : ''}">${b.consumoGiorno != null ? num1.format(b.consumoGiorno) + ' %/giorno' : '—'}</strong></div>
+    <p class="piccolo" style="margin:0">ultima ${b.ultima}% · ${q.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })} ${pad(q.getHours())}:${pad(q.getMinutes())} · ${b.letture} letture${b.consumoGiorno == null ? ' · servono almeno 12 ore di letture' : ' · normale ~3–5 %/giorno'}</p></div>`;
 }
 
 // ───────────────────────── Cibo (SPEC v7 §D, mockup 23) ─────────────────────────
@@ -2368,6 +2530,90 @@ function vistaAnnoFuori(main, query) {
  * (parametri "Volo …"): vento al suolo, raffiche, vento a 1500 m (850 hPa), pioggia; ora volabile solo con la luce
  * (alba + margine, tramonto − margine) e, se il decollo ha orientamenti, col vento da un settore buono.
  */
+const LIVELLI_VOLO = [950, 900, 850, 800, 750, 700, 650, 600];
+
+/** Gradiente adiabatico saturo (°C/km), come Volo.satura del tablet. */
+function saturaVolo(t, z) {
+  const p = 1013.25 * Math.pow(1 - 2.25577e-5 * z, 5.25588), es = 6.112 * Math.exp(17.67 * t / (t + 243.5));
+  const rs = 0.622 * es / Math.max(1, p - es), tk = t + 273.15;
+  return Math.max(3, Math.min(9.8, 9.8 * (1 + 2.501e6 * rs / (287 * tk)) / (1 + 2.501e6 * 2.501e6 * rs * 0.622 / (1004 * 287 * tk * tk))));
+}
+
+/**
+ * v9: termiche dell'ora (stesse formule del tablet, Volo.java): bolla T+1 °C (+1 col sole pieno), base cumuli, plafond (cima della
+ * bolla, non oltre la base), W* di Deardorff col flusso stimato dalla radiazione (35 %), B/S = 12 × (W* diviso il taglio in m/s)², vento in quota.
+ */
+function termicheOra(h, i, quota, sogliaQuota) {
+  const t2 = h.temperature_2m[i], td2 = h.dew_point_2m[i], sw = Math.max(0, h.shortwave_radiation[i] || 0);
+  const rad = d => d * Math.PI / 180;
+  // Profilo: [quota, T, u, v] dal suolo in su (vento in componenti, per interpolare la direzione).
+  const pr = [[quota + 10, t2, h.wind_speed_10m[i] * Math.sin(rad(h.wind_direction_10m[i])), h.wind_speed_10m[i] * Math.cos(rad(h.wind_direction_10m[i]))]];
+  LIVELLI_VOLO.forEach(l => {
+    const z = h['geopotential_height_' + l + 'hPa'][i], v = h['wind_speed_' + l + 'hPa'][i], d = h['wind_direction_' + l + 'hPa'][i];
+    if (z > quota + 30) pr.push([z, h['temperature_' + l + 'hPa'][i], v * Math.sin(rad(d)), v * Math.cos(rad(d))]);
+  });
+  const ip = (z, k) => {
+    if (z <= pr[0][0]) return pr[0][k];
+    for (let j = 1; j < pr.length; j++) if (z <= pr[j][0]) return pr[j - 1][k] + (z - pr[j - 1][0]) / (pr[j][0] - pr[j - 1][0]) * (pr[j][k] - pr[j - 1][k]);
+    return pr[pr.length - 1][k];
+  };
+  const tb0 = t2 + 1 + Math.min(1, sw / 600), lcl = quota + 125 * Math.max(0, tb0 - td2);
+  let tb = tb0, cima = quota + 4500;
+  for (let z = quota + 25; z < quota + 4500; z += 25) { tb -= (z - 25 < lcl ? 9.8 : saturaVolo(tb, z)) * 0.025; if (tb < ip(z, 1)) { cima = z; break; } }
+  let plaf = Math.max(quota, Math.min(cima, lcl));
+  if (sw < 50) plaf = quota;
+  const zi = plaf - quota, flusso = 0.35 * sw;
+  let w = zi < 150 || flusso < 20 ? 0 : Math.cbrt(9.81 / (t2 + 273.15) * flusso / 1200 * zi);
+  if ((h.precipitation[i] || 0) > 0.3) w *= 0.3; else if ((h.cloud_cover_low[i] || 0) > 80) w *= 0.6;
+  w = Math.min(4, w);
+  const taglio = Math.hypot(ip(plaf, 2) - pr[0][2], ip(plaf, 3) - pr[0][3]) / 3.6;
+  const bs = w < 0.3 ? 0 : Math.min(20, 12 * Math.pow(w / Math.max(0.5, taglio), 2));
+  let vqForte = 0;
+  for (const z of [1500, 2000, 2500, 3000, 3500]) {
+    if (z < quota) continue;
+    if (Math.hypot(ip(z, 2), ip(z, 3)) >= sogliaQuota) { vqForte = z; break; }
+  }
+  return { w, plaf, bs, vqForte };
+}
+
+/** Stelle 0–5 con le stesse regole del tablet (Volo.stelle): punti su 8, "Al limite" al massimo 2. */
+function stelleVolo(ore, col, calmo, sv, quota) {
+  if (col === 'rosso' || !ore.length) return { n: 0, parola: 'non volabile', perche: ['0 stelle: nessuna finestra volabile'], mig: '' };
+  const min = col === 'verde' ? 2 : 1;
+  const L = Math.max(1, Math.min(3, ore.filter(o => o.st >= min).length));
+  let da = 0, meglio = -1;
+  for (let k = 0; k + L <= ore.length; k++) {
+    const pz = ore.slice(k, k + L);
+    if (pz.some(o => o.st < min)) continue;
+    const sm = pz.reduce((a, o) => a + o.w, 0);
+    if (sm > meglio) { meglio = sm; da = k; }
+  }
+  const pz = ore.slice(da, da + L);
+  const media = f => pz.reduce((a, o) => a + o[f], 0) / pz.length;
+  const w = media('w'), plaf = media('plaf'), bs = media('bs'), sopra = plaf - quota;
+  const perche = [];
+  let punti = 0;
+  const pw = w >= 2 ? 3 : w >= 1.5 ? 2 : w >= 1 ? 1 : 0;
+  punti += pw; perche.push(`termiche W* ${w.toFixed(1).replace('.', ',')} m/s: +${pw}`);
+  const pp = sopra >= 1500 ? 3 : sopra >= 1000 ? 2 : sopra >= 500 ? 1 : 0;
+  punti += pp; perche.push(`plafond +${intIt(Math.max(0, sopra))} m sopra il decollo: +${pp}`);
+  const v = Math.max(...pz.map(o => o.v)), raf = Math.max(...pz.map(o => o.raf - o.v)), pio = Math.max(...pz.map(o => o.pio)), mm = Math.max(...pz.map(o => o.mm));
+  const fascia = v >= calmo && v <= sv * 0.6;
+  if (fascia) punti++;
+  perche.push(`vento al decollo ${v} km/h: ${fascia ? '+1' : 'fuori dalla fascia buona (+0)'}`);
+  if (bs >= 5) punti++;
+  perche.push(`regolarità B/S ${Math.round(bs)}: ${bs >= 5 ? '+1' : 'sotto 5 (+0)'}`);
+  if (pio >= 20 || mm > 0) { punti--; perche.push(`pioggia ${pio}%: −1`); }
+  if (raf >= 12) { punti--; perche.push(`raffiche +${raf} km/h sul vento medio: −1`); }
+  const vq = pz.find(o => o.vqForte);
+  if (vq) { punti--; perche.push(`vento in quota forte da ${intIt(vq.vqForte)} m: −1`); }
+  let nn = Math.max(1, Math.min(5, Math.round(Math.max(0, punti) * 5 / 8)));
+  if (col === 'giallo') { nn = Math.min(nn, 2); perche.push('al limite: al massimo 2 stelle'); }
+  perche.push(`= ${Math.max(0, punti)} punti su 8 → ${nn} ${nn === 1 ? 'stella' : 'stelle'}`);
+  return { n: nn, parola: nn >= 5 ? 'ottima' : nn === 4 ? 'buona' : nn === 3 ? 'discreta' : 'scarsa', perche, w, plaf, bs,
+    mig: pad(pz[0].ora) + '–' + pad(pz[pz.length - 1].ora + 1) };
+}
+
 async function vistaSiVola(main, query) {
   const giorno = Number((query && query.get('g')) || 0);
   const pref = preferitiFuori();
@@ -2381,11 +2627,13 @@ async function vistaSiVola(main, query) {
   const html = [];
   for (const p of pref) {
     try {
-      const chiaveC = 'sivola:' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3);
+      const chiaveC = 'sivola9:' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3);
       let j = LS.get(chiaveC, null);
       if (!j || Date.now() - j.alle > 3600e3) {
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&forecast_days=3&timezone=Europe%2FRome` +
-          '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_850hPa,precipitation_probability,precipitation&daily=sunrise,sunset';
+          (p.quota ? '&elevation=' + p.quota : '') + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_850hPa,precipitation_probability,precipitation,' +
+          'temperature_2m,dew_point_2m,shortwave_radiation,cloud_cover_low,' + LIVELLI_VOLO.map(l => `temperature_${l}hPa,geopotential_height_${l}hPa,wind_speed_${l}hPa,wind_direction_${l}hPa`).join(',') +
+          '&daily=sunrise,sunset&wind_speed_unit=kmh';
         j = await (await fetch(url)).json();
         j.alle = Date.now();
         LS.set(chiaveC, j);
@@ -2405,14 +2653,19 @@ async function vistaSiVola(main, query) {
         let st = v <= sv && raf <= sr && v15 <= s15 ? 2 : v <= sv * 1.2 && raf <= sr * 1.2 && v15 <= s15 * 1.2 ? 1 : 0;
         if (pio >= pPct || h.precipitation[i] >= numPar('Volo pioggia max (mm/h)', 0.2)) st = 0;
         if (conOr && v > calmo) st = Math.min(st, orient[sett] === 2 ? 2 : orient[sett] === 1 ? 1 : 0);
-        ore.push({ ora: t.getHours(), st, v: Math.round(v), raf: Math.round(raf), v15: Math.round(v15), sett, pio });
+        ore.push(Object.assign({ ora: t.getHours(), st, v: Math.round(v), raf: Math.round(raf), v15: Math.round(v15), sett, pio, mm: h.precipitation[i] || 0 },
+          termicheOra(h, i, j.elevation != null ? j.elevation : (p.quota || 0), s15)));
       }
       const buone = ore.filter(o => o.st === 2), limite = ore.filter(o => o.st >= 1);
       const col = buone.length >= 2 ? 'verde' : limite.length >= 2 ? 'giallo' : 'rosso';
       const fin = (buone.length ? buone : limite);
       const mezzo = ore[Math.floor(ore.length / 2)] || {};
+      const stl = stelleVolo(ore, col, calmo, sv, j.elevation != null ? j.elevation : (p.quota || 0));
       html.push(`<div class="carta sivola" style="margin-top:10px"><div class="budget-testa"><strong>${esc(p.nome)}</strong>
         <span class="semaforo ${col}">${col === 'verde' ? 'Volabile' : col === 'giallo' ? 'Al limite' : 'No'}</span></div>
+        <details class="stelle-volo"><summary><span class="stelle">${'★'.repeat(stl.n)}<span class="spente">${'★'.repeat(5 - stl.n)}</span></span> ${stl.n}/5 · ${stl.parola}${stl.mig ? ' · migliore ' + stl.mig : ''}</summary>
+          <p class="piccolo">${stl.perche.map(esc).join('<br>')}</p></details>
+        ${stl.n ? `<p class="piccolo">termiche W* ${String(stl.w.toFixed(1)).replace('.', ',')} m/s · plafond ${intIt(stl.plaf)} m · B/S ${Math.round(stl.bs)}</p>` : ''}
         <p class="piccolo">${fin.length ? 'finestra ' + pad(fin[0].ora) + '–' + pad(fin[fin.length - 1].ora + 1) : 'nessuna finestra'}${conOr ? ' · decollo ' + Object.keys(orient).filter(k => orient[k]).join(' / ') : ''}</p>
         <div class="ore-volo">${ore.map(o => `<span class="ora-volo st${o.st}" title="${o.ora}h: ${o.v} km/h ${o.sett}, raff. ${o.raf}, 1500 m ${o.v15}, pioggia ${o.pio}%">${o.ora}</span>`).join('')}</div>
         <p class="piccolo">a metà giornata: vento ${mezzo.v != null ? mezzo.v + ' km/h ' + mezzo.sett + ' · raff. ' + mezzo.raf + ' · 1500 m ' + mezzo.v15 + ' km/h · pioggia ' + mezzo.pio + '%' : '—'}</p></div>`);
