@@ -269,3 +269,40 @@ svg.traccia { width: 100%; height: auto; display: block; }
 .pannello-fatta { margin-top: 12px; border: 1px solid var(--accento); }
 .pannello-fatta input[type=date], .data-fatta { background: var(--superficie-2); color: var(--testo); border: 1px solid var(--bordo); border-radius: 8px; padding: 6px 8px; font-size: 15px; }
 .cerca-storico { width: 100%; margin: 8px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bordo); background: var(--superficie); color: var(--testo); font-size: 16px; }
+/* v10: Si vola? con due voti (Volo buono, Tranquillità) e Regola tranquillità */
+.riga-volo { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--bordo); }
+.sivola .etichetta + .riga-volo { border-top: 0; }
+.pillole-voto { display: flex; gap: 6px; }
+.pillola-voto { display: inline-block; min-height: 30px; padding: 2px 10px; border-radius: 9px; font-size: 15px; font-weight: 700; background: transparent; border: 1.5px solid currentColor; }
+.pillola-voto.verde { color: var(--verde); } .pillola-voto.giallo { color: var(--giallo); } .pillola-voto.rosso { color: var(--rosso); }
+.pillola-voto.grigio { color: var(--testo-2); }
+.pillola-voto.aperta { background: rgba(138, 180, 248, .15); }
+.perche-box { padding: 4px 0 10px; }
+.perche-voto .riga-perche { display: flex; justify-content: space-between; gap: 10px; font-size: 15px; padding: 3px 0; border-bottom: 1px solid var(--bordo); }
+.perche-voto .riga-perche.totale { font-weight: 700; border-bottom: 0; }
+.cursore-riga { padding: 6px 0; }
+.cursore-riga input[type=range] { width: 100%; min-height: 0; padding: 0; background: none; border: 0; accent-color: var(--accento); }
+.cursore-riga .doppio { position: relative; height: 30px; }
+.cursore-riga .doppio input[type=range] { position: absolute; left: 0; top: 0; pointer-events: none; -webkit-appearance: none; appearance: none; height: 30px; background: transparent; }
+.cursore-riga .doppio input[type=range]::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accento); border: 2px solid #fff; }
+.cursore-riga .doppio input[type=range]::-moz-range-thumb { pointer-events: auto; width: 20px; height: 20px; border-radius: 50%; background: var(--accento); border: 2px solid #fff; }
+.cursore-riga .doppio::before { content: ''; position: absolute; left: 0; right: 0; top: 13px; height: 4px; border-radius: 2px; background: var(--superficie-2); }
+.segmenti { display: inline-flex; border: 1px solid var(--bordo); border-radius: 8px; overflow: hidden; margin-top: 6px; }
+.segmenti button { border: 0; border-radius: 0; min-height: 34px; padding: 2px 16px; background: transparent; }
+.segmenti button.attivo { background: rgba(138, 180, 248, .25); color: var(--accento); }
+/* v10: Gruppi bollette e Regole delle categorie */
+.regole li { display: block; padding: 10px 0; border-top: 1px solid var(--bordo); }
+.regole .testa-regola { display: flex; align-items: center; gap: 6px; }
+.regole .testa-regola input { flex: 1; min-width: 0; }
+.regole .frecce button { min-height: 32px; padding: 0 9px; }
+.chip-parola { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; margin: 3px 4px 0 0; border-radius: 999px; font-size: 14px; border: 1px solid var(--verde); color: var(--verde); }
+.chip-parola.no { border-color: var(--rosso); color: var(--rosso); }
+.chip-parola.intesa { border-color: var(--accento); color: var(--accento); }
+.chip-parola button { min-height: 0; padding: 0 2px; border: 0; background: none; color: inherit; font-size: 14px; }
+.aggiungi-parola { display: inline-flex; gap: 4px; margin-top: 4px; }
+.aggiungi-parola input { width: 9em; min-height: 30px; padding: 2px 8px; font-size: 14px; }
+.aggiungi-parola button { min-height: 30px; padding: 0 10px; font-size: 14px; }
+.anteprima-regole li { display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 5px 0; }
+.anteprima-regole .corpo { flex: 1; min-width: 0; }
+.entra { color: var(--verde); } .esce { color: var(--rosso); }
+.scorciatoia { margin-top: 10px; border: 1px solid var(--accento); }

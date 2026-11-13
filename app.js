@@ -341,6 +341,7 @@ const VISTE = {
   allenamento: vistaAllenamento, scheda: vistaScheda, progressi: vistaProgressi,
   cibo: vistaCibo, dieta: vistaCibo, piano: vistaPiano, controlli: vistaControlli, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
   fuori: vistaFuori, uscita: vistaUscita, anno: vistaAnnoFuori, vola: vistaSiVola, // v8
+  tranquillita: vistaTranquillita, // v10
 };
 
 function percorso() {
@@ -423,7 +424,6 @@ function vistaFinanze(main, query) {
   const mese = (query && query.get('mese')) || meseDefault();
   const f = calcFinanze(mese);
   const mesiMedia = numPar('Mesi per la media (simulazione)', 3);
-  const cat = (dati.categorie || []).map(c => c.nome);
   const catSpesa = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE).map(c => c.nome);
   const recenti = righe('Movimenti').slice().sort((a, b) => (a.Data < b.Data ? 1 : -1)).slice(0, 8);
   const delta = f.spesoPrec ? (f.speso - f.spesoPrec) / f.spesoPrec : 0;
@@ -435,7 +435,6 @@ function vistaFinanze(main, query) {
     <div class="testata"><h1>Finanze</h1>${selettoreMese('finanze', mese)}</div>
     ${schedeFinanze('finanze')}
     ${f.avviso ? `<div class="avviso-box"><strong>Occhio:</strong> a questo ritmo il mese chiude a ${euro0.format(f.proiezione)}, oltre il budget di ${euro0.format(f.budget)}.</div>` : ''}
-    <button class="primario largo-tutto" type="button" id="vai-spesa">＋ Spesa veloce</button>
     <div class="griglia-2">
       <a class="carta" href="#/movimenti?mese=${mese}"><div class="etichetta">Speso</div>
         <div class="grande num">${euro0.format(f.speso)}</div>
@@ -461,40 +460,17 @@ function vistaFinanze(main, query) {
 
     ${sezioneDaAssegnare()}
 
-    <h2 id="spesa-veloce">Spesa veloce</h2>
-    <form class="modulo carta" id="f-mov">
-      <label class="campo">Importo (€)<input name="importo" type="number" step="0.01" min="0" inputmode="decimal" required></label>
-      <label class="campo largo">Descrizione<input name="descrizione" required></label>
-      <label class="campo">Categoria<select name="categoria"><option value="">Automatica</option>${cat.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
-      <label class="campo">Data<input name="data" type="date" value="${oggiK()}"></label>
-      <label class="campo">Tipo<select name="tipo"><option value="uscita">Uscita</option><option value="entrata">Entrata</option></select></label>
-      <button class="primario" type="submit">Aggiungi</button>
-    </form>
-
     <div class="azioni"><a class="bottone" href="#/bollette">Bollette e utenze</a><a class="bottone" href="#/mutuo">Mutuo</a></div>
 
     <h2>Ultimi movimenti</h2>
     <ul class="elenco carta">${recenti.length ? recenti.map(m => `<li>
       <div class="corpo"><div>${esc(m.Descrizione)}</div><div class="sotto">${dataBreve(m.Data)} · ${esc(m.Categoria || 'senza categoria')}</div></div>
       <div class="num ${n(m['Importo (uscite negative)']) > 0 ? 'testo-verde' : ''}">${euro.format(n(m['Importo (uscite negative)']))}</div>
-      <button class="piccolo-b" data-elimina="${esc(m.ID)}" title="Elimina">✕</button></li>`).join('') : '<li class="vuoto">Nessun movimento. Aggiungine uno o incolla l\'esportazione della banca nel foglio.</li>'}</ul>
+      <button class="piccolo-b" data-elimina="${esc(m.ID)}" title="Elimina">✕</button></li>`).join('') : '<li class="vuoto">Nessun movimento: arrivano dall\'import della banca (cartella "Movimenti banca").</li>'}</ul>
     ${bottonePenna('Movimenti')}`;
 
-  $('#f-mov').onsubmit = e => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const imp = Math.abs(n(fd.get('importo')));
-    if (!imp) return;
-    salva('Movimenti', {
-      'Data': fd.get('data') || oggiK(), 'Descrizione': fd.get('descrizione'),
-      'Importo (uscite negative)': fd.get('tipo') === 'entrata' ? imp : -imp,
-      'Categoria': fd.get('categoria') || categorizzaLocale(fd.get('descrizione')),
-    });
-    toast('Movimento aggiunto');
-    disegna();
-  };
+  // v10 §7: niente più "Spesa veloce" (un movimento scritto a mano si sommava a quello importato dalla banca).
   collegaMese(main);
-  $('#vai-spesa', main).onclick = () => { $('#spesa-veloce', main).scrollIntoView(); $('#f-mov input[name=importo]', main).focus(); };
   $$('[data-cat]', main).forEach(li => {
     li.onclick = () => { location.hash = '#/movimenti?mese=' + mese + '&categoria=' + encodeURIComponent(li.dataset.cat); };
   });
@@ -600,7 +576,8 @@ function disegnaMovimenti(main) {
     <div class="barra-sel ${nSel ? 'visibile' : ''}">
       <span>${nSel} selezionati</span><strong class="num">${euro.format(sommaSel)}</strong>
       <select id="sel-cat" aria-label="Assegna categoria"><option value="">categoria ▾</option>${categorie.map(c => `<option>${esc(c)}</option>`).join('')}</select>
-      <button type="button" class="piccolo-b" id="sel-annulla">✕</button></div>`;
+      <button type="button" class="piccolo-b" id="sel-annulla">✕</button></div>
+    <div id="regole-box"></div>`;
 
   const ridisegna = () => { const y = window.scrollY; disegnaMovimenti(main); window.scrollTo(0, y); };
   $('#mov-mese', main).onchange = e => { s.mese = e.target.value; s.sel = {}; ridisegna(); };
@@ -627,8 +604,37 @@ function disegnaMovimenti(main) {
     cb.onchange = () => { if (cb.checked) s.sel[cb.dataset.sel] = true; else delete s.sel[cb.dataset.sel]; ridisegna(); };
   });
   $$('[data-cat-id]', main).forEach(sel => {
-    sel.onchange = () => { salva('Movimenti', { 'Categoria': sel.value }, sel.dataset.catId); toast(sel.value); ridisegna(); };
+    sel.onchange = () => {
+      salva('Movimenti', { 'Categoria': sel.value }, sel.dataset.catId); toast(sel.value);
+      // v10 §9: "Vale anche per i prossimi?" con la parola proposta (azione parolaChiave).
+      const m = righe('Movimenti').find(x => x.ID === sel.dataset.catId);
+      s.proposta = sel.value !== DA_ASSEGNARE ? { id: sel.dataset.catId, categoria: sel.value, parola: parolaProposta(m && m.Descrizione) } : null;
+      ridisegna();
+    };
   });
+  if (s.proposta) {
+    const li = $('[data-id="' + CSS.escape(s.proposta.id) + '"]', main);
+    if (li) {
+      const p = s.proposta, box = document.createElement('li');
+      box.className = 'carta scorciatoia';
+      box.innerHTML = `<div class="aggiungi-parola">Vale anche per i prossimi? Aggiungi la parola <input value="${esc(p.parola)}"> a <strong>${esc(p.categoria)}</strong>
+        <button type="button" class="primario">Aggiungi</button><button type="button" class="piccolo-b">No</button></div>`;
+      li.after(box);
+      const [si, no] = $$('button', box);
+      no.onclick = () => { s.proposta = null; box.remove(); };
+      si.onclick = async () => {
+        const parola = $('input', box).value.trim();
+        if (parola.length < 3) { toast('Parola troppo corta'); return; }
+        try {
+          const r = await api('parolaChiave', { categoria: p.categoria, parola });
+          toast('Ricordata per ' + p.categoria + (r.applicate ? ': assegnati altri ' + r.applicate : ''));
+          s.proposta = null; testiMov = null;
+          sincronizza();
+        } catch (e) { toast('Serve la rete: ' + (e.message || e)); }
+      };
+    }
+  }
+  disegnaRegoleCategorie($('#regole-box', main));
   $('#sel-cat', main).onchange = e => {
     const c = e.target.value;
     if (!c) return;
@@ -874,10 +880,12 @@ function vistaBollette(main, query) {
         return `<div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
           : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>`; })()}
     </div>` : ''}
-    <p class="piccolo">Gruppi e parole chiave: parametro "Gruppi bollette" nel foglio. Ogni gruppo somma i movimenti del mese.</p>`;
+    <div id="gb-box"></div>`;
   const vai = (gr, m) => { location.hash = '#/bollette?' + new URLSearchParams(Object.assign(gr ? { gruppo: gr } : {}, { mesi: m || mesiP })).toString(); };
   $$('[data-gruppo]', main).forEach(li => { li.onclick = () => vai(li.dataset.gruppo === scelto ? '' : li.dataset.gruppo); });
-  $$('[data-mov]', main).forEach(li => { li.onclick = () => { location.hash = '#/movimenti?id=' + encodeURIComponent(li.dataset.mov); }; });
+  // v10 §8: tocco su un movimento del Dettaglio = scorciatoie "Togli da <gruppo>" / "Metti in un gruppo…" (e "Apri il movimento").
+  $$('[data-mov]', main).forEach(li => { li.onclick = () => scorciatoiaBolletta(li, li.dataset.mov, $('#gb-box', main)); });
+  disegnaGruppiBollette($('#gb-box', main));
   const tg = $('#bo-togli', main);
   if (tg) tg.onclick = () => vai('');
   $('#bo-mesi', main).onchange = e => { LS.set('bolletteMesi', Number(e.target.value)); vai(scelto, e.target.value); };
@@ -2576,9 +2584,46 @@ function termicheOra(h, i, quota, sogliaQuota) {
   return { w, plaf, bs, vqForte };
 }
 
-/** Stelle 0–5 con le stesse regole del tablet (Volo.stelle): punti su 8, "Al limite" al massimo 2. */
-function stelleVolo(ore, col, calmo, sv, quota) {
-  if (col === 'rosso' || !ore.length) return { n: 0, parola: 'non volabile', perche: ['0 stelle: nessuna finestra volabile'], mig: '' };
+/**
+ * v10 (SPEC v10 §4): due voti su 10 al posto delle stelle, con le stesse regole del tablet (Volo.votoVolo / Volo.tranquillita).
+ * Caso di prova comune (mockup 34): W* 1,4 · plafond +1.040 · vento 5 km/h su soglia 20 (calmo 5) · B/S 7 · pioggia 0,9 mm ·
+ * raffiche +4 · vento forte in quota da 2.500 m → Volo buono 3 punti = 4/10, Tranquillità 4 punti = 5/10.
+ */
+const TRANQ_INIZIALI = {
+  idealeDa: 1, idealeA: 1.5, accettabile: 2, forte: 2.5, plafond: 300, ventoPieno: 30, ventoMeta: 50, raffiche: 8, bsPieno: 7, bsMeta: 5, penalita: -2,
+};
+const TRANQ_NOMI = {
+  idealeDa: 'Tranquillità termica ideale da (m/s)', idealeA: 'Tranquillità termica ideale a (m/s)',
+  accettabile: 'Tranquillità termica accettabile fino a (m/s)', forte: 'Tranquillità termica troppo forte oltre (m/s)',
+  plafond: 'Tranquillità plafond che basta (m)', ventoPieno: 'Tranquillità vento decollo pieno (%)', ventoMeta: 'Tranquillità vento decollo metà (%)',
+  raffiche: 'Tranquillità raffiche tollerate (km/h)', bsPieno: 'Tranquillità B/S pieno', bsMeta: 'Tranquillità B/S metà', penalita: 'Tranquillità penalità',
+};
+
+/** Soglie della Tranquillità dai Parametri (valori iniziali se una riga manca). */
+function tranqPar() {
+  const t = {};
+  Object.keys(TRANQ_INIZIALI).forEach(k => {
+    const v = Number(String(par(TRANQ_NOMI[k]) == null ? '' : par(TRANQ_NOMI[k])).replace(',', '.'));
+    t[k] = par(TRANQ_NOMI[k]) === '' || par(TRANQ_NOMI[k]) == null || isNaN(v) ? TRANQ_INIZIALI[k] : v;
+  });
+  t.penalita = -Math.abs(t.penalita) || -2;
+  return t;
+}
+
+const dec1 = x => String(Math.round(x * 10) / 10).replace('.', ',');
+
+/** Classe del colore di un voto (SPEC v10 §10): ≥ 6 verde · 4–5 giallo · ≤ 3 rosso · 0 / non volabile grigio. */
+function coloreVoto(v) { return !v ? 'grigio' : v >= 6 ? 'verde' : v >= 4 ? 'giallo' : 'rosso'; }
+
+/** Da punti su 8 a voto su 10; non volabile = 0, "Al limite" al massimo 2, totale negativo = 0. */
+function votoDaPunti(punti, col) {
+  if (col === 'rosso') return 0;
+  const v = Math.max(0, Math.min(10, Math.round(Math.max(0, punti) / 8 * 10)));
+  return col === 'giallo' ? Math.min(v, 2) : v;
+}
+
+/** Ore migliori: fino a 3 ore di fila nella finestra con il W* medio più alto (come v9). */
+function oreMiglioriVolo(ore, col) {
   const min = col === 'verde' ? 2 : 1;
   const L = Math.max(1, Math.min(3, ore.filter(o => o.st >= min).length));
   let da = 0, meglio = -1;
@@ -2588,93 +2633,575 @@ function stelleVolo(ore, col, calmo, sv, quota) {
     const sm = pz.reduce((a, o) => a + o.w, 0);
     if (sm > meglio) { meglio = sm; da = k; }
   }
-  const pz = ore.slice(da, da + L);
-  const media = f => pz.reduce((a, o) => a + o[f], 0) / pz.length;
-  const w = media('w'), plaf = media('plaf'), bs = media('bs'), sopra = plaf - quota;
-  const perche = [];
-  let punti = 0;
-  const pw = w >= 2 ? 3 : w >= 1.5 ? 2 : w >= 1 ? 1 : 0;
-  punti += pw; perche.push(`termiche W* ${w.toFixed(1).replace('.', ',')} m/s: +${pw}`);
-  const pp = sopra >= 1500 ? 3 : sopra >= 1000 ? 2 : sopra >= 500 ? 1 : 0;
-  punti += pp; perche.push(`plafond +${intIt(Math.max(0, sopra))} m sopra il decollo: +${pp}`);
-  const v = Math.max(...pz.map(o => o.v)), raf = Math.max(...pz.map(o => o.raf - o.v)), pio = Math.max(...pz.map(o => o.pio)), mm = Math.max(...pz.map(o => o.mm));
-  const fascia = v >= calmo && v <= sv * 0.6;
-  if (fascia) punti++;
-  perche.push(`vento al decollo ${v} km/h: ${fascia ? '+1' : 'fuori dalla fascia buona (+0)'}`);
-  if (bs >= 5) punti++;
-  perche.push(`regolarità B/S ${Math.round(bs)}: ${bs >= 5 ? '+1' : 'sotto 5 (+0)'}`);
-  if (pio >= 20 || mm > 0) { punti--; perche.push(`pioggia ${pio}%: −1`); }
-  if (raf >= 12) { punti--; perche.push(`raffiche +${raf} km/h sul vento medio: −1`); }
-  const vq = pz.find(o => o.vqForte);
-  if (vq) { punti--; perche.push(`vento in quota forte da ${intIt(vq.vqForte)} m: −1`); }
-  let nn = Math.max(1, Math.min(5, Math.round(Math.max(0, punti) * 5 / 8)));
-  if (col === 'giallo') { nn = Math.min(nn, 2); perche.push('al limite: al massimo 2 stelle'); }
-  perche.push(`= ${Math.max(0, punti)} punti su 8 → ${nn} ${nn === 1 ? 'stella' : 'stelle'}`);
-  return { n: nn, parola: nn >= 5 ? 'ottima' : nn === 4 ? 'buona' : nn === 3 ? 'discreta' : 'scarsa', perche, w, plaf, bs,
-    mig: pad(pz[0].ora) + '–' + pad(pz[pz.length - 1].ora + 1) };
+  return ore.slice(da, da + L);
 }
 
-async function vistaSiVola(main, query) {
-  const giorno = Number((query && query.get('g')) || 0);
+/** Valori misurati alle ore migliori: W*, plafond sopra il decollo, B/S (medie), vento, raffiche sul medio, pioggia (massimi), vento in quota. */
+function misureVolo(pz, quota) {
+  const media = f => pz.reduce((a, o) => a + o[f], 0) / pz.length;
+  const vq = pz.find(o => o.vqForte);
+  // Arrotondati come sul tablet (W* al decimo, plafond a 10 m, B/S intero), così i voti sono gli stessi.
+  const w = Math.round(media('w') * 10) / 10, plaf = Math.round(media('plaf') / 10) * 10;
+  return { w, plaf, sopra: plaf - Math.max(0, quota), bs: Math.round(media('bs')), v: Math.max(...pz.map(o => o.v)),
+    raf: Math.max(...pz.map(o => o.raf - o.v)), pio: Math.max(...pz.map(o => o.pio)), mm: Math.max(...pz.map(o => o.mm)),
+    vq: vq ? vq.vqForte : 0, mig: pad(pz[0].ora) + '–' + pad(pz[pz.length - 1].ora + 1) };
+}
+
+/** Voto "Volo buono": i punti della v9 (fissi), mostrati su 10. Righe = [testo, punti]. */
+function votoVolo(x, col, calmo, sv) {
+  if (col === 'rosso' || !x) return { voto: 0, punti: 0, righe: [['nessuna finestra volabile', 0]] };
+  const r = [];
+  const pw = x.w >= 2 ? 3 : x.w >= 1.5 ? 2 : x.w >= 1 ? 1 : 0;
+  r.push([`Termiche W* ${dec1(x.w)} m/s`, pw]);
+  const pp = x.sopra >= 1500 ? 3 : x.sopra >= 1000 ? 2 : x.sopra >= 500 ? 1 : 0;
+  r.push([`Plafond +${intIt(Math.max(0, x.sopra))} m sopra il decollo`, pp]);
+  const fascia = x.v >= calmo && x.v <= sv * 0.6;
+  r.push([`Vento decollo ${Math.round(x.v)} km/h (buono ${intIt(calmo)}–${intIt(sv * 0.6)})`, fascia ? 1 : 0]);
+  r.push([`Regolarità B/S ${Math.round(x.bs)} (da 5)`, x.bs >= 5 ? 1 : 0]);
+  if (x.pio >= 20 || x.mm > 0) r.push([`Pioggia ${Math.round(x.pio)} %${x.mm > 0 ? ' · ' + dec1(x.mm) + ' mm' : ''}`, -1]);
+  if (x.raf >= 12) r.push([`Raffiche +${Math.round(x.raf)} km/h sul medio`, -1]);
+  if (x.vq) r.push([`Vento forte in quota da ${intIt(x.vq)} m`, -1]);
+  const punti = r.reduce((a, q) => a + q[1], 0);
+  if (col === 'giallo') r.push(['Al limite: voto massimo 2', 0]);
+  return { voto: votoDaPunti(punti, col), punti: Math.max(0, punti), righe: r };
+}
+
+/** Voto "Tranquillità" (SPEC v10 §4.2): termiche dolci, poco vento, niente rischi. tp = tranqPar(). */
+function votoTranquillita(x, col, sv, tp) {
+  if (col === 'rosso' || !x) return { voto: 0, punti: 0, righe: [['nessuna finestra volabile', 0]] };
+  const r = [], pen = tp.penalita;
+  const w = Math.round(x.w * 10) / 10; // come si vede (1,5 m/s = ideale)
+  if (w > tp.forte) r.push([`Termiche troppo forti (${dec1(w)} m/s, oltre ${dec1(tp.forte)})`, -2]);
+  else if (w > tp.accettabile) r.push([`Termiche forti (${dec1(w)} m/s, oltre ${dec1(tp.accettabile)})`, 0]);
+  else if (w > tp.idealeA) r.push([`Termiche vivaci (${dec1(w)} m/s, fino a ${dec1(tp.accettabile)})`, 1]);
+  else if (w >= tp.idealeDa) r.push([`Termiche dolci (${dec1(w)} m/s, ideale ${dec1(tp.idealeDa)}–${dec1(tp.idealeA)})`, 3]);
+  else r.push([`Termiche deboli (${dec1(w)} m/s, sotto ${dec1(tp.idealeDa)})`, 2]);
+  r.push([`Plafond +${intIt(Math.max(0, x.sopra))} m (basta ${intIt(tp.plafond)})`, x.sopra >= tp.plafond ? 1 : 0]);
+  const pct = sv > 0 ? x.v / sv * 100 : 100;
+  r.push([`Vento decollo ${Math.round(x.v)} km/h (${Math.round(pct)} % soglia)`, pct <= tp.ventoPieno ? 2 : pct <= tp.ventoMeta ? 1 : 0]);
+  r.push([x.bs >= tp.bsPieno ? `Termiche regolari (B/S ${Math.round(x.bs)})` : x.bs >= tp.bsMeta ? `Termiche da gestire (B/S ${Math.round(x.bs)})` : `Termiche strappate (B/S ${Math.round(x.bs)})`,
+    x.bs >= tp.bsPieno ? 2 : x.bs >= tp.bsMeta ? 1 : 0]);
+  const piove = x.pio >= 20 || x.mm > 0;
+  r.push([piove ? `Pioggia ${x.mm > 0 ? dec1(x.mm) + ' mm' : Math.round(x.pio) + ' %'}` : 'Pioggia no', piove ? pen : 0]);
+  r.push([`Raffiche +${Math.max(0, Math.round(x.raf))} km/h (limite ${intIt(tp.raffiche)})`, x.raf >= tp.raffiche ? pen : 0]);
+  r.push([x.vq ? `Vento forte in quota da ${intIt(x.vq)} m` : 'Vento in quota ok', x.vq ? pen : 0]);
+  const punti = r.reduce((a, q) => a + q[1], 0);
+  if (col === 'giallo') r.push(['Al limite: voto massimo 2', 0]);
+  return { voto: votoDaPunti(punti, col), punti: Math.max(0, punti), righe: r };
+}
+
+/** Il perché di un voto: una riga per voce con i punti (verdi i positivi, gialli/rossi i negativi) e il totale. */
+function perVotoHtml(titolo, v) {
+  return `<div class="perche-voto"><div class="etichetta">${esc(titolo)} ${v.voto}/10 · perché</div>
+    ${v.righe.map(q => `<div class="riga-perche"><span>${esc(q[0])}</span><strong class="${q[1] > 0 ? 'testo-verde' : q[1] < -1 ? 'testo-rosso' : q[1] < 0 ? 'testo-giallo' : ''}">${q[1] > 0 ? '+' + q[1] : q[1] < 0 ? '−' + Math.abs(q[1]) : '0'}</strong></div>`).join('')}
+    <div class="riga-perche totale"><span>Totale ${v.punti} / 8 punti</span><strong>${v.voto}/10</strong></div></div>`;
+}
+
+/** Previsione Open-Meteo di un preferito (cache di un'ora, come v9). */
+async function previsioneVolo(p) {
+  const chiaveC = 'sivola9:' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3);
+  let j = LS.get(chiaveC, null);
+  if (!j || Date.now() - j.alle > 3600e3) {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&forecast_days=3&timezone=Europe%2FRome` +
+      (p.quota ? '&elevation=' + p.quota : '') + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_850hPa,precipitation_probability,precipitation,' +
+      'temperature_2m,dew_point_2m,shortwave_radiation,cloud_cover_low,' + LIVELLI_VOLO.map(l => `temperature_${l}hPa,geopotential_height_${l}hPa,wind_speed_${l}hPa,wind_direction_${l}hPa`).join(',') +
+      '&daily=sunrise,sunset&wind_speed_unit=kmh';
+    j = await (await fetch(url)).json();
+    if (!j.hourly) throw new Error('previsione non valida');
+    j.alle = Date.now();
+    LS.set(chiaveC, j);
+  }
+  return j;
+}
+
+/**
+ * Per ogni preferito e per oggi / domani / dopodomani: semaforo, finestra, ore migliori e misure (stesse soglie "Volo …"
+ * della pagina FUORI). Le misure servono anche all'anteprima di "Regola tranquillità" senza riscaricare.
+ */
+async function calcolaVoli() {
   const pref = preferitiFuori();
-  const nomiG = [0, 1, 2].map(i => { const d = new Date(); d.setDate(d.getDate() + i); return i === 0 ? 'oggi' : i === 1 ? 'domani' : d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric' }); });
-  main.innerHTML = `<div class="testata"><h1>Si vola?</h1><span class="piccolo">Open-Meteo · stima</span></div>${schedeFuori('vola')}
-    <div class="chips">${nomiG.map((x, i) => `<a class="chip ${i === giorno ? 'attivo' : ''}" href="#/vola?g=${i}">${x}</a>`).join('')}</div>
-    <div id="sv-elenco">${pref.length ? '<p class="piccolo">Carico le previsioni…</p>' : '<p class="piccolo">Nessuna località preferita: aggiungile dalla pagina FUORI del tablet (★).</p>'}</div>`;
-  if (!pref.length) return;
   const sv = numPar('Volo vento medio max (km/h)', 25), sr = numPar('Volo raffiche max (km/h)', 30), s15 = numPar('Volo vento 1500 m max (km/h)', 30);
   const pPct = numPar('Volo pioggia %', 40), calmo = numPar('Volo vento calmo (km/h)', 5), mAlba = numPar('Volo margine alba (h)', 2), mTram = numPar('Volo margine tramonto (min)', 30);
-  const html = [];
+  const pMm = numPar('Volo pioggia max (mm/h)', 0.2);
+  const out = [];
   for (const p of pref) {
-    try {
-      const chiaveC = 'sivola9:' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3);
-      let j = LS.get(chiaveC, null);
-      if (!j || Date.now() - j.alle > 3600e3) {
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&forecast_days=3&timezone=Europe%2FRome` +
-          (p.quota ? '&elevation=' + p.quota : '') + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_850hPa,precipitation_probability,precipitation,' +
-          'temperature_2m,dew_point_2m,shortwave_radiation,cloud_cover_low,' + LIVELLI_VOLO.map(l => `temperature_${l}hPa,geopotential_height_${l}hPa,wind_speed_${l}hPa,wind_direction_${l}hPa`).join(',') +
-          '&daily=sunrise,sunset&wind_speed_unit=kmh';
-        j = await (await fetch(url)).json();
-        j.alle = Date.now();
-        LS.set(chiaveC, j);
-      }
-      const h = j.hourly, alba = new Date(j.daily.sunrise[giorno]), tram = new Date(j.daily.sunset[giorno]);
-      const orient = {};
-      p.orient.split(',').forEach(x => { const q = x.split(':'); if (q[0]) orient[q[0].trim().toUpperCase().replace('SW', 'SO').replace('NW', 'NO').replace(/^W$/, 'O')] = Number(q[1]) || 0; });
-      const conOr = Object.keys(orient).length > 0;
+    const orient = {};
+    p.orient.split(',').forEach(x => { const q = x.split(':'); if (q[0]) orient[q[0].trim().toUpperCase().replace('SW', 'SO').replace('NW', 'NO').replace(/^W$/, 'O')] = Number(q[1]) || 0; });
+    const conOr = Object.keys(orient).length > 0;
+    const voce = { p, orient: conOr ? Object.keys(orient).filter(k => orient[k]).join('/') : '', giorni: [], errore: '' };
+    out.push(voce);
+    let j;
+    try { j = await previsioneVolo(p); } catch (e) { voce.errore = 'previsione non disponibile (serve la rete)'; continue; }
+    const h = j.hourly, quota = j.elevation != null ? j.elevation : (p.quota || 0);
+    for (let g = 0; g < 3; g++) {
+      const alba = new Date(j.daily.sunrise[g]), tram = new Date(j.daily.sunset[g]);
       const ore = [];
       for (let i = 0; i < h.time.length; i++) {
         const t = new Date(h.time[i]);
-        if (t.toDateString() !== new Date(alba).toDateString()) continue;
-        const luce = t >= new Date(alba.getTime() + mAlba * 3600e3) && t <= new Date(tram.getTime() - mTram * 60e3);
-        if (!luce) continue;
+        if (t.toDateString() !== alba.toDateString()) continue;
+        if (!(t >= new Date(alba.getTime() + mAlba * 3600e3) && t <= new Date(tram.getTime() - mTram * 60e3))) continue;
         const v = h.wind_speed_10m[i], raf = h.wind_gusts_10m[i], v15 = h.wind_speed_850hPa[i], pio = h.precipitation_probability[i] || 0;
         const sett = ROSA8[Math.round(((h.wind_direction_10m[i] % 360) + 360) % 360 / 45) % 8];
         let st = v <= sv && raf <= sr && v15 <= s15 ? 2 : v <= sv * 1.2 && raf <= sr * 1.2 && v15 <= s15 * 1.2 ? 1 : 0;
-        if (pio >= pPct || h.precipitation[i] >= numPar('Volo pioggia max (mm/h)', 0.2)) st = 0;
+        if (pio >= pPct || h.precipitation[i] >= pMm) st = 0;
         if (conOr && v > calmo) st = Math.min(st, orient[sett] === 2 ? 2 : orient[sett] === 1 ? 1 : 0);
         ore.push(Object.assign({ ora: t.getHours(), st, v: Math.round(v), raf: Math.round(raf), v15: Math.round(v15), sett, pio, mm: h.precipitation[i] || 0 },
-          termicheOra(h, i, j.elevation != null ? j.elevation : (p.quota || 0), s15)));
+          termicheOra(h, i, quota, s15)));
       }
       const buone = ore.filter(o => o.st === 2), limite = ore.filter(o => o.st >= 1);
       const col = buone.length >= 2 ? 'verde' : limite.length >= 2 ? 'giallo' : 'rosso';
-      const fin = (buone.length ? buone : limite);
-      const mezzo = ore[Math.floor(ore.length / 2)] || {};
-      const stl = stelleVolo(ore, col, calmo, sv, j.elevation != null ? j.elevation : (p.quota || 0));
-      html.push(`<div class="carta sivola" style="margin-top:10px"><div class="budget-testa"><strong>${esc(p.nome)}</strong>
-        <span class="semaforo ${col}">${col === 'verde' ? 'Volabile' : col === 'giallo' ? 'Al limite' : 'No'}</span></div>
-        <details class="stelle-volo"><summary><span class="stelle">${'★'.repeat(stl.n)}<span class="spente">${'★'.repeat(5 - stl.n)}</span></span> ${stl.n}/5 · ${stl.parola}${stl.mig ? ' · migliore ' + stl.mig : ''}</summary>
-          <p class="piccolo">${stl.perche.map(esc).join('<br>')}</p></details>
-        ${stl.n ? `<p class="piccolo">termiche W* ${String(stl.w.toFixed(1)).replace('.', ',')} m/s · plafond ${intIt(stl.plaf)} m · B/S ${Math.round(stl.bs)}</p>` : ''}
-        <p class="piccolo">${fin.length ? 'finestra ' + pad(fin[0].ora) + '–' + pad(fin[fin.length - 1].ora + 1) : 'nessuna finestra'}${conOr ? ' · decollo ' + Object.keys(orient).filter(k => orient[k]).join(' / ') : ''}</p>
-        <div class="ore-volo">${ore.map(o => `<span class="ora-volo st${o.st}" title="${o.ora}h: ${o.v} km/h ${o.sett}, raff. ${o.raf}, 1500 m ${o.v15}, pioggia ${o.pio}%">${o.ora}</span>`).join('')}</div>
-        <p class="piccolo">a metà giornata: vento ${mezzo.v != null ? mezzo.v + ' km/h ' + mezzo.sett + ' · raff. ' + mezzo.raf + ' · 1500 m ' + mezzo.v15 + ' km/h · pioggia ' + mezzo.pio + '%' : '—'}</p></div>`);
-    } catch (e) {
-      html.push(`<div class="carta" style="margin-top:10px"><strong>${esc(p.nome)}</strong><p class="piccolo">previsione non disponibile (serve la rete)</p></div>`);
+      const fin = buone.length ? buone : limite;
+      const x = col !== 'rosso' && ore.length ? misureVolo(oreMiglioriVolo(ore, col), quota) : null;
+      voce.giorni.push({ g, data: alba, col, x, sv, calmo, finestra: fin.length && col !== 'rosso' ? pad(fin[0].ora) + '–' + pad(fin[fin.length - 1].ora + 1) : '' });
     }
   }
+  return out;
+}
+
+function nomeGiornoVolo(d, g) {
+  const t = d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric' });
+  return g === 0 ? 'oggi ' + t : t;
+}
+
+/** "Si vola?" (mockup 35): per ogni preferito tre righe (oggi, domani, dopodomani) con "Volo N · Tranq. N"; tocco = il perché. */
+async function vistaSiVola(main) {
+  const pref = preferitiFuori();
+  main.innerHTML = `<div class="testata"><h1>Si vola?</h1><span class="piccolo">Open-Meteo · stima</span></div>${schedeFuori('vola')}
+    <div id="sv-elenco">${pref.length ? '<p class="piccolo">Carico le previsioni…</p>' : '<p class="piccolo">Nessuna località preferita: aggiungile dalla pagina FUORI del tablet (★).</p>'}</div>
+    <div class="carta piccolo" style="margin-top:12px">Tocca un voto per il perché. <a href="#/tranquillita"><strong>✎ Regola tranquillità</strong></a></div>`;
+  if (!pref.length) return;
+  const voli = await calcolaVoli();
+  const tp = tranqPar();
   const el = $('#sv-elenco', main);
-  if (el) el.innerHTML = html.join('');
+  if (!el) return;
+  const perche = {};
+  el.innerHTML = voli.map((vo, i) => `<div class="carta sivola" style="margin-top:10px">
+      <div class="etichetta">${esc(vo.p.nome)}${vo.orient ? ' · ' + esc(vo.orient) : ''}</div>
+      ${vo.errore ? `<p class="piccolo">${esc(vo.errore)}</p>` : vo.giorni.map(gg => {
+        const vv = votoVolo(gg.x, gg.col, gg.calmo, gg.sv), vt = votoTranquillita(gg.x, gg.col, gg.sv, tp);
+        const k = i + '-' + gg.g;
+        perche[k + 'v'] = perVotoHtml('Volo buono', vv) + (gg.x ? `<p class="piccolo">finestra ${gg.finestra} · migliore ${gg.x.mig} · W* ${dec1(gg.x.w)} m/s · plafond ${intIt(gg.x.plaf)} m · B/S ${Math.round(gg.x.bs)}</p>` : '');
+        perche[k + 't'] = perVotoHtml('Tranquillità', vt) + '<p class="piccolo"><a href="#/tranquillita">✎ Regola tranquillità</a></p>';
+        return `<div class="riga-volo"><span>${esc(nomeGiornoVolo(gg.data, gg.g))}</span>
+          ${gg.col === 'rosso' ? '<span class="piccolo">non volabile · 0 / 0</span>'
+            : `<span class="pillole-voto"><button type="button" class="pillola-voto ${coloreVoto(vv.voto)}" data-perche="${k}v">Volo ${vv.voto}</button><button type="button" class="pillola-voto ${coloreVoto(vt.voto)}" data-perche="${k}t">Tranq. ${vt.voto}</button></span>`}</div>
+          <div class="perche-box" data-box="${k}" hidden></div>`;
+      }).join('')}</div>`).join('');
+  $$('[data-perche]', el).forEach(b => {
+    b.onclick = () => {
+      const k = b.dataset.perche, box = $('[data-box="' + k.slice(0, -1) + '"]', el);
+      const aperto = !box.hidden && box.dataset.di === k;
+      $$('.perche-box', el).forEach(x => { x.hidden = true; x.dataset.di = ''; });
+      $$('.pillola-voto', el).forEach(x => x.classList.remove('aperta'));
+      if (aperto) return;
+      box.innerHTML = perche[k];
+      box.hidden = false;
+      box.dataset.di = k;
+      b.classList.add('aperta');
+    };
+  });
+}
+
+/**
+ * "Regola tranquillità" (mockup 35, SPEC v10 §4.4): un cursore per ogni soglia (non si incrociano), penalità −1/−2/−3,
+ * anteprima prima → dopo sui dati già scaricati, "Salva nei Parametri" (azione parametri) e "↺ valori iniziali".
+ */
+let regolaTranq = null;
+async function vistaTranquillita(main) {
+  if (!regolaTranq) regolaTranq = tranqPar();
+  const t = regolaTranq, sv = numPar('Volo vento medio max (km/h)', 25);
+  const cursore = (k, min, max, passo, testo, valore) => `<div class="cursore-riga"><div class="budget-testa"><span>${testo}</span><strong id="tq-v-${k}">${valore}</strong></div>
+    <input type="range" data-tq="${k}" min="${min}" max="${max}" step="${passo}" value="${t[k]}" aria-label="${esc(testo)}"></div>`;
+  const testi = {
+    ideale: () => `${dec1(t.idealeDa)} – ${dec1(t.idealeA)} m/s`, accettabile: () => `fino a ${dec1(t.accettabile)} m/s`, forte: () => `oltre ${dec1(t.forte)} m/s`,
+    plafond: () => `+${intIt(t.plafond)} m`, ventoPieno: () => `≤ ${t.ventoPieno} % soglia · ${intIt(sv * t.ventoPieno / 100)} km/h`,
+    ventoMeta: () => `≤ ${t.ventoMeta} % soglia · ${intIt(sv * t.ventoMeta / 100)} km/h`, raffiche: () => `+${t.raffiche} km/h`,
+    bsPieno: () => `≥ ${t.bsPieno}`, bsMeta: () => `≥ ${t.bsMeta}`,
+  };
+  main.innerHTML = `<div class="testata"><h1>Regola tranquillità</h1></div>${schedeFuori('vola')}
+    <div class="carta regola-tranq">
+      <div class="cursore-riga"><div class="budget-testa"><span>Termica ideale</span><strong id="tq-v-ideale">${testi.ideale()}</strong></div>
+        <div class="doppio"><input type="range" data-tq="idealeDa" min="0.3" max="3" step="0.1" value="${t.idealeDa}" aria-label="Termica ideale da">
+          <input type="range" data-tq="idealeA" min="0.3" max="3" step="0.1" value="${t.idealeA}" aria-label="Termica ideale a"></div></div>
+      ${cursore('accettabile', 0.5, 3.5, 0.1, 'Termica accettabile', testi.accettabile())}
+      ${cursore('forte', 1, 4, 0.1, 'Termica troppo forte (penalità)', testi.forte())}
+      ${cursore('plafond', 0, 1500, 50, 'Plafond che mi basta', testi.plafond())}
+      ${cursore('ventoPieno', 5, 100, 5, 'Vento al decollo (pieno punteggio)', testi.ventoPieno())}
+      ${cursore('ventoMeta', 5, 100, 5, 'Vento al decollo (metà punteggio)', testi.ventoMeta())}
+      ${cursore('raffiche', 2, 25, 1, 'Raffiche tollerate', testi.raffiche())}
+      ${cursore('bsPieno', 1, 15, 0.5, 'Regolarità (B/S) per pieno punteggio', testi.bsPieno())}
+      ${cursore('bsMeta', 1, 15, 0.5, 'Regolarità (B/S) per metà punteggio', testi.bsMeta())}
+      <div class="cursore-riga"><span>Penalità pioggia · raffiche · quota</span>
+        <div class="segmenti">${[-1, -2, -3].map(p => `<button type="button" data-pen="${p}" class="${t.penalita === p ? 'attivo' : ''}">−${Math.abs(p)}</button>`).join('')}</div></div>
+    </div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Anteprima con questi valori</div><div id="tq-anteprima"><p class="piccolo">Carico le previsioni…</p></div></div>
+    <button type="button" class="primario largo-tutto" id="tq-salva" style="margin-top:12px">Salva nei Parametri</button>
+    <p style="text-align:center"><button type="button" class="piccolo-b" id="tq-iniziali">↺ valori iniziali</button></p>
+    <p class="piccolo">I cursori non si incrociano. Il voto Volo buono non cambia: si regola solo la Tranquillità.</p>`;
+
+  let voli = [];
+  const prima = tranqPar();
+  const anteprima = () => {
+    const box = $('#tq-anteprima', main);
+    if (!box) return;
+    const r = [];
+    voli.forEach(vo => vo.giorni.forEach(gg => {
+      if (gg.col === 'rosso') return;
+      const a = votoTranquillita(gg.x, gg.col, gg.sv, prima).voto, b = votoTranquillita(gg.x, gg.col, gg.sv, t).voto;
+      r.push(`<div class="budget-testa riga-sottile"><span>${esc(vo.p.nome)} ${esc(nomeGiornoVolo(gg.data, gg.g))}</span>
+        <span>${a} → <span class="pillola-voto ${coloreVoto(b)}">${b}</span></span></div>`);
+    }));
+    box.innerHTML = r.join('') || '<p class="piccolo">Nessun giorno volabile nei preferiti (oppure manca la rete).</p>';
+  };
+  // Vincoli: da ≤ a ≤ accettabile ≤ forte; vento pieno ≤ metà; B/S metà ≤ pieno. Chi si muove spinge gli altri.
+  const vincola = k => {
+    const ord = ['idealeDa', 'idealeA', 'accettabile', 'forte'];
+    const i = ord.indexOf(k);
+    if (i >= 0) {
+      for (let j = i + 1; j < ord.length; j++) if (t[ord[j]] < t[ord[j - 1]]) t[ord[j]] = t[ord[j - 1]];
+      for (let j = i - 1; j >= 0; j--) if (t[ord[j]] > t[ord[j + 1]]) t[ord[j]] = t[ord[j + 1]];
+    }
+    if (k === 'ventoPieno' && t.ventoMeta < t.ventoPieno) t.ventoMeta = t.ventoPieno;
+    if (k === 'ventoMeta' && t.ventoPieno > t.ventoMeta) t.ventoPieno = t.ventoMeta;
+    if (k === 'bsPieno' && t.bsMeta > t.bsPieno) t.bsMeta = t.bsPieno;
+    if (k === 'bsMeta' && t.bsPieno < t.bsMeta) t.bsPieno = t.bsMeta;
+  };
+  const aggiorna = () => {
+    $$('[data-tq]', main).forEach(i => { i.value = t[i.dataset.tq]; });
+    Object.keys(testi).forEach(k => { const e = $('#tq-v-' + k, main); if (e) e.textContent = testi[k](); });
+    $$('[data-pen]', main).forEach(b => b.classList.toggle('attivo', Number(b.dataset.pen) === t.penalita));
+    anteprima();
+  };
+  $$('[data-tq]', main).forEach(i => { i.oninput = () => { t[i.dataset.tq] = Math.round(Number(i.value) * 10) / 10; vincola(i.dataset.tq); aggiorna(); }; });
+  $$('[data-pen]', main).forEach(b => { b.onclick = () => { t.penalita = Number(b.dataset.pen); aggiorna(); }; });
+  $('#tq-iniziali', main).onclick = () => { Object.assign(t, TRANQ_INIZIALI); aggiorna(); toast('Valori iniziali: si salvano con "Salva nei Parametri"'); };
+  $('#tq-salva', main).onclick = async () => {
+    if (!script10()) { toast(SERVE_V10); return; }
+    const valori = {};
+    Object.keys(TRANQ_NOMI).forEach(k => { valori[TRANQ_NOMI[k]] = t[k]; });
+    await salvaParametri(valori, 'Tranquillità salvata nei Parametri');
+    regolaTranq = null;
+    location.hash = '#/vola';
+  };
+  voli = await calcolaVoli().catch(() => []);
+  anteprima();
+}
+
+// ───────────────────────── v10: regole dall'app (SPEC v10 §8 Gruppi bollette, §9 Regole delle categorie) ─────────────────────────
+
+/** Testo dei movimenti di 24 mesi con "Dettagli banca" (azione testiMovimenti), per le anteprime. Senza rete: i movimenti dell'app. */
+let testiMov = null;
+/** v10: le azioni nuove (parametri Tranquillità e Gruppi bollette, categorie) esistono solo dallo script versione 10. */
+const SERVE_V10 = 'Serve lo script del foglio versione 10: non salvato';
+function script10() { return Number(dati.versione || 0) >= 10; }
+async function caricaTestiMov() {
+  if (testiMov) return testiMov;
+  try {
+    const r = await api('testiMovimenti');
+    testiMov = { righe: r.movimenti || [], completi: true };
+  } catch (e) {
+    testiMov = { righe: righe('Movimenti').filter(m => m.Data).map(m => ({ id: m.ID, d: m.Data, desc: m.Descrizione || '', imp: n(m['Importo (uscite negative)']), cat: (m.Categoria || '').trim(), txt: '' })),
+      completi: false, errore: e.message || String(e) };
+    setTimeout(() => { testiMov = null; }, 60e3); // riprova al prossimo giro
+  }
+  return testiMov;
+}
+
+const PAROLE_GENERICHE = ['addebito', 'pagamento', 'bonifico', 'carta', 'favore', 'presso', 'operazione', 'disposizione', 'ordine', 'della', 'delle',
+  'dello', 'degli', 'spa', 'srl', 'snc', 'sas', 'via', 'corso', 'piazza', 'torino', 'italia', 'italy', 'pos', 'sdd', 'core', 'debito', 'diretto', 'rata',
+  'canone', 'acquisto', 'commissione', 'commissioni', 'contabilizzato', 'attesa', 'data', 'valuta', 'mandato', 'addebiti'];
+
+/** Parole di un testo nel formato delle bollette ("Iren S.p.A." → "iren s p a"), come testoBolletta_ dello script. */
+function testoBol(s) { return ' ' + normalizza(s).replace(/[^a-z0-9\-]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '; }
+
+/** "Gruppi bollette" → [{ nome, si: [...], no: [...] }] (stesse regole di gruppiBollette_). */
+function leggiGruppiBol(valore) {
+  return String(valore || '').split('|').map(g => {
+    const p = g.split('=');
+    if (p.length < 2) return null;
+    const parole = p.slice(1).join('=').split(',').map(x => testoBol(x).trim()).filter(Boolean);
+    return { nome: p[0].trim(), si: parole.filter(x => x[0] !== '-'), no: parole.filter(x => x[0] === '-').map(x => x.slice(1).trim()) };
+  }).filter(g => g && g.nome);
+}
+function scriviGruppiBol(gruppi) {
+  return gruppi.filter(g => g.nome.trim() && g.si.length).map(g => g.nome.trim().replace(/[=|,]/g, ' ') + ' = ' + g.si.concat(g.no.map(x => '-' + x)).join(', ')).join(' | ');
+}
+/** Primo gruppo che prende il movimento (indice) o −1. */
+function gruppoDiMov(gruppi, m) {
+  const t = testoBol(m.desc + ' ' + m.txt);
+  const c = p => t.indexOf(' ' + p) >= 0;
+  return gruppi.findIndex(g => g.si.length && g.si.some(c) && !g.no.some(c));
+}
+/** Parola "caratteristica" di un movimento: la più lunga, non generica, che non compare negli altri movimenti dati. */
+function parolaCaratteristica(m, altri) {
+  const parole = testoBol(m.desc + ' ' + m.txt).trim().split(' ').filter(w => w.length >= 4 && !/^\d+$/.test(w) && PAROLE_GENERICHE.indexOf(w) < 0);
+  const testi = altri.map(a => testoBol(a.desc + ' ' + a.txt));
+  const uniche = parole.filter(w => !testi.some(t => t.indexOf(' ' + w + ' ') >= 0));
+  return (uniche.length ? uniche : parole).sort((a, b) => b.length - a.length)[0] || '';
+}
+
+let statoGB = null; // { gruppi, salvati } mentre si modificano i gruppi
+
+/** Riquadro "Gruppi bollette" in fondo a Bollette: elenco nell'ordine di applicazione, parole sì/no, anteprima, Salva. */
+async function disegnaGruppiBollette(box) {
+  const salvati = String(par('Gruppi bollette') || '');
+  if (!statoGB || statoGB.salvati !== salvati) statoGB = { gruppi: leggiGruppiBol(salvati), salvati };
+  const s = statoGB, vecchi = leggiGruppiBol(salvati);
+  const cambiato = scriviGruppiBol(s.gruppi) !== scriviGruppiBol(vecchi);
+  const tm = await caricaTestiMov();
+  if (!box.isConnected) return;
+  // Anteprima: con le regole nuove quanti movimenti prende ogni gruppo e quali entrano / escono.
+  const conta = s.gruppi.map(() => 0), cambi = s.gruppi.map(() => []);
+  tm.righe.forEach(m => {
+    const a = gruppoDiMov(vecchi, m), b = gruppoDiMov(s.gruppi, m);
+    if (b >= 0) conta[b]++;
+    const na = a >= 0 ? vecchi[a].nome : '', nb = b >= 0 ? s.gruppi[b].nome : '';
+    if (na === nb) return;
+    s.gruppi.forEach((g, i) => {
+      if (g.nome === nb) cambi[i].push({ m, entra: true, da: na });
+      if (g.nome === na) cambi[i].push({ m, entra: false, a: nb });
+    });
+    if (na && !s.gruppi.some(g => g.nome === na)) { /* gruppo tolto: i suoi movimenti li mostra il gruppo che li prende */ }
+  });
+  const rigaMov = (c) => `<li><span class="${c.entra ? 'entra' : 'esce'}">${c.entra ? 'entra' : 'esce'}</span>
+    <span class="data-riga">${daChiave(c.m.d).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: '2-digit' })}</span>
+    <div class="corpo">${esc(c.m.desc)}${c.entra ? (c.da ? ' <span class="piccolo">(da ' + esc(c.da) + ')</span>' : '') : (c.a ? ' <span class="piccolo">(→ ' + esc(c.a) + ')</span>' : ' <span class="piccolo">(→ nessun gruppo)</span>')}</div>
+    <div class="num">${euro.format(Math.abs(c.m.imp))}</div></li>`;
+  box.innerHTML = `<div class="carta" style="margin-top:12px" id="gruppi-bollette">
+    <div class="etichetta">Gruppi bollette</div>
+    <p class="piccolo" style="margin-top:0">In ordine di applicazione: il primo gruppo che prende il movimento vince. Parole cercate in descrizione e dettagli della banca.</p>
+    <ul class="elenco regole">${s.gruppi.map((g, i) => `<li data-g="${i}">
+      <div class="testa-regola"><span class="quadratino" style="background:${COLORI_GRUPPI[i % COLORI_GRUPPI.length]}"></span>
+        <input value="${esc(g.nome)}" data-nome-g="${i}" aria-label="Nome del gruppo">
+        <span class="frecce"><button type="button" data-su="${i}" ${i ? '' : 'disabled'}>↑</button><button type="button" data-giu="${i}" ${i < s.gruppi.length - 1 ? '' : 'disabled'}>↓</button></span>
+        <button type="button" class="piccolo-b" data-togli-g="${i}" title="Elimina il gruppo">✕</button></div>
+      <div>${g.si.map((p, k) => `<span class="chip-parola">${esc(p)}<button type="button" data-via="${i}:si:${k}">✕</button></span>`).join('')}
+        <span class="aggiungi-parola"><input placeholder="parola" data-nuova="${i}:si"><button type="button" data-aggiungi="${i}:si">＋</button></span></div>
+      <div>${g.no.map((p, k) => `<span class="chip-parola no">−${esc(p)}<button type="button" data-via="${i}:no:${k}">✕</button></span>`).join('')}
+        <span class="aggiungi-parola"><input placeholder="esclusa" data-nuova="${i}:no"><button type="button" data-aggiungi="${i}:no">＋ esclusa</button></span></div>
+      <p class="piccolo" style="margin:4px 0 0">${conta[i]} movimenti in 24 mesi${cambi[i].length ? ` · <span class="entra">${cambi[i].filter(c => c.entra).length} entrano</span> · <span class="esce">${cambi[i].filter(c => !c.entra).length} escono</span>` : ''}</p>
+      ${cambi[i].length ? `<ul class="elenco anteprima-regole">${cambi[i].slice(0, 30).map(rigaMov).join('')}${cambi[i].length > 30 ? `<li class="vuoto">… altri ${cambi[i].length - 30}</li>` : ''}</ul>` : ''}
+    </li>`).join('')}</ul>
+    <div class="azioni"><button type="button" id="gb-nuovo">＋ nuovo gruppo</button></div>
+    ${!tm.completi ? `<p class="piccolo testo-giallo">Anteprima solo sui movimenti dell'app (${esc(tm.errore || 'serve la rete')}): i dettagli della banca non ci sono.</p>` : ''}
+    ${cambiato ? `<div class="azioni"><button type="button" class="primario" id="gb-salva">Salva</button><button type="button" id="gb-annulla">Annulla le modifiche</button></div>`
+      : '<p class="piccolo">Nessuna modifica. Tocca un movimento nel Dettaglio per toglierlo da un gruppo o metterlo in un altro.</p>'}
+  </div>`;
+  const ridisegna = () => disegnaGruppiBollette(box);
+  const parola = v => testoBol(v).trim();
+  $$('[data-nome-g]', box).forEach(inp => { inp.onchange = () => { s.gruppi[+inp.dataset.nomeG].nome = inp.value.replace(/[=|,]/g, ' ').trim(); ridisegna(); }; });
+  $$('[data-su]', box).forEach(b => { b.onclick = () => { const i = +b.dataset.su; s.gruppi.splice(i - 1, 0, s.gruppi.splice(i, 1)[0]); ridisegna(); }; });
+  $$('[data-giu]', box).forEach(b => { b.onclick = () => { const i = +b.dataset.giu; s.gruppi.splice(i + 1, 0, s.gruppi.splice(i, 1)[0]); ridisegna(); }; });
+  $$('[data-togli-g]', box).forEach(b => { b.onclick = () => { const i = +b.dataset.togliG; if (confirm('Eliminare il gruppo "' + s.gruppi[i].nome + '"? (si salva solo con Salva)')) { s.gruppi.splice(i, 1); ridisegna(); } }; });
+  $$('[data-via]', box).forEach(b => { b.onclick = () => { const q = b.dataset.via.split(':'); s.gruppi[+q[0]][q[1]].splice(+q[2], 1); ridisegna(); }; });
+  $$('[data-aggiungi]', box).forEach(b => {
+    b.onclick = () => {
+      const q = b.dataset.aggiungi.split(':'), inp = $('[data-nuova="' + b.dataset.aggiungi + '"]', box), p = parola(inp.value);
+      if (p.length < 2) { toast('Parola troppo corta'); return; }
+      const lista = s.gruppi[+q[0]][q[1]];
+      if (lista.indexOf(p) < 0) lista.push(p);
+      ridisegna();
+    };
+  });
+  $$('[data-nuova]', box).forEach(inp => { inp.onkeydown = e => { if (e.key === 'Enter') $('[data-aggiungi="' + inp.dataset.nuova + '"]', box).click(); }; });
+  $('#gb-nuovo', box).onclick = () => {
+    const nome = (prompt('Nome del nuovo gruppo') || '').replace(/[=|,]/g, ' ').trim();
+    if (!nome) return;
+    const p = parola(prompt('Prima parola che lo riconosce (es. iren)') || '');
+    if (!p) { toast('Serve almeno una parola'); return; }
+    s.gruppi.push({ nome, si: [p], no: [] });
+    ridisegna();
+  };
+  const sv = $('#gb-salva', box);
+  if (sv) sv.onclick = async () => {
+    if (!script10()) { toast(SERVE_V10); return; }
+    const valore = scriviGruppiBol(s.gruppi);
+    if (!valore) { toast('Serve almeno un gruppo con una parola'); return; }
+    await salvaParametri({ 'Gruppi bollette': valore }, 'Gruppi bollette salvati');
+    statoGB = null;
+    await sincronizza(); // il riepilogo (dati.casa) si ricalcola con i gruppi nuovi
+    disegna();
+  };
+  const an = $('#gb-annulla', box);
+  if (an) an.onclick = () => { statoGB = null; ridisegna(); };
+}
+
+/**
+ * Scorciatoie dal Dettaglio (tocco su un movimento): "Togli da <gruppo>" (propone una parola esclusa) o "Metti in un gruppo…"
+ * (propone la parola da aggiungere). Cambiano solo i gruppi in modifica: si vede l'anteprima e si salva con "Salva".
+ */
+async function scorciatoiaBolletta(li, idMov, box) {
+  const vecchio = $('.scorciatoia', li.parentNode);
+  if (vecchio) { const era = vecchio.dataset.mov; vecchio.remove(); if (era === idMov) return; }
+  const tm = await caricaTestiMov();
+  const salvati = String(par('Gruppi bollette') || '');
+  if (!statoGB || statoGB.salvati !== salvati) statoGB = { gruppi: leggiGruppiBol(salvati), salvati };
+  const s = statoGB;
+  const m = tm.righe.find(x => x.id === idMov) || { id: idMov, desc: (righe('Movimenti').find(x => x.ID === idMov) || {}).Descrizione || '', txt: '', imp: 0 };
+  const gi = gruppoDiMov(s.gruppi, m);
+  // "Altri" = movimenti del gruppo con un'altra descrizione (lo stesso negozio in altri mesi non conta).
+  const altri = gi >= 0 ? tm.righe.filter(x => x.id !== m.id && testoBol(x.desc) !== testoBol(m.desc) && gruppoDiMov(s.gruppi, x) === gi) : [];
+  const propostaNo = parolaCaratteristica(m, altri);
+  const propostaSi = parolaCaratteristica(m, []);
+  const div = document.createElement('li');
+  div.className = 'carta scorciatoia';
+  div.dataset.mov = idMov;
+  div.innerHTML = `<div class="piccolo">${esc(m.desc)}</div>
+    ${gi >= 0 ? `<div class="aggiungi-parola">Togli da <strong>${esc(s.gruppi[gi].nome)}</strong> con la parola esclusa
+      <input value="${esc(propostaNo)}" id="sc-no"><button type="button" id="sc-togli">Togli</button></div>` : ''}
+    <div class="aggiungi-parola">Metti in <select id="sc-gruppo">${s.gruppi.map((g, i) => `<option value="${i}" ${i === gi ? 'disabled' : ''}>${esc(g.nome)}</option>`).join('')}</select>
+      con la parola <input value="${esc(propostaSi)}" id="sc-si"><button type="button" id="sc-metti">Metti</button></div>
+    <div class="azioni"><a class="bottone" href="#/movimenti?id=${encodeURIComponent(idMov)}">Apri il movimento</a></div>`;
+  li.after(div);
+  const vaiAnteprima = () => { disegnaGruppiBollette(box).then(() => { const g = $('#gruppi-bollette'); if (g) g.scrollIntoView(); }); toast('Controlla l\'anteprima e premi Salva'); };
+  const t = $('#sc-togli', div);
+  if (t) t.onclick = () => { const p = testoBol($('#sc-no', div).value).trim(); if (p.length < 2) return; if (s.gruppi[gi].no.indexOf(p) < 0) s.gruppi[gi].no.push(p); div.remove(); vaiAnteprima(); };
+  $('#sc-metti', div).onclick = () => {
+    const i = Number($('#sc-gruppo', div).value), p = testoBol($('#sc-si', div).value).trim();
+    if (p.length < 2 || !s.gruppi[i]) return;
+    if (s.gruppi[i].si.indexOf(p) < 0) s.gruppi[i].si.push(p);
+    // Se un gruppo prima nell'elenco lo prende ancora, lo si esclude lì.
+    const prima = gruppoDiMov(s.gruppi, m);
+    if (prima >= 0 && prima !== i) s.gruppi[prima].no.push(parolaCaratteristica(m, tm.righe.filter(x => x.id !== m.id && testoBol(x.desc) !== testoBol(m.desc) && gruppoDiMov(s.gruppi, x) === prima)));
+    div.remove();
+    vaiAnteprima();
+  };
+}
+
+// §9 Regole delle categorie ────────────────────────────
+
+let statoCat = null; // { cats: [{ nome, vecchio, parole, intesa }], salvate, sposta, sel }
+
+function catDaDati() {
+  return (dati.categorie || []).map(c => ({ nome: c.nome, vecchio: c.nome,
+    parole: String(c.paroleChiave || '').split(',').map(x => normalizza(x)).filter(Boolean),
+    intesa: String(c.intesa || '').split(';').map(x => x.trim()).filter(Boolean) }));
+}
+/** Categoria dalle parole chiave (regola 1 dell'import, come assegnaCategoria_): la prima con una parola trovata, o ''. */
+function catDaParole(cats, m) {
+  const testo = ' ' + normalizza(m.txt || m.desc);
+  for (const c of cats) {
+    if (c.nome === DA_ASSEGNARE) continue;
+    if (c.parole.some(p => new RegExp('[^a-z]' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(testo))) return c.nome;
+  }
+  return '';
+}
+
+async function disegnaRegoleCategorie(box) {
+  const firma = JSON.stringify(catDaDati());
+  // base = regole com'erano all'apertura: l'anteprima confronta con quelle anche dopo "Salva" (poi si spuntano i movimenti).
+  if (!statoCat || statoCat.salvate !== firma) statoCat = { cats: catDaDati(), salvate: firma, sposta: {}, sel: {}, base: statoCat ? statoCat.base : catDaDati() };
+  const s = statoCat, vecchie = catDaDati();
+  const cambiato = JSON.stringify(s.cats) !== firma;
+  const tm = await caricaTestiMov();
+  if (!box.isConnected) return;
+  const intesaViste = [...new Set(vecchie.concat(s.cats).reduce((a, c) => a.concat(c.intesa), []))].sort();
+  const usate = {};
+  tm.righe.forEach(m => { usate[m.cat] = (usate[m.cat] || 0) + 1; });
+  const tolte = vecchie.filter(v => !s.cats.some(c => c.vecchio === v.nome) && v.nome !== DA_ASSEGNARE);
+  // Anteprima: movimenti già presenti che le parole nuove porterebbero in un'altra categoria (solo regola delle parole:
+  // la categoria Intesa dei movimenti vecchi non è salvata). Cambiano solo quelli spuntati.
+  const tutte = tm.righe.filter(m => m.id).map(m => ({ m, a: catDaParole(s.cats, m), prima: catDaParole(s.base, m) }))
+    .filter(x => x.a && x.a !== x.m.cat);
+  const proposte = tutte.filter(x => x.a !== x.prima);
+  const altre = tutte.filter(x => x.a === x.prima); // le parole li davano già altrove: forse corretti a mano
+  const nSel = proposte.filter(x => s.sel[x.m.id]).length;
+  box.innerHTML = `<div class="carta" style="margin-top:16px" id="regole-categorie">
+    <div class="etichetta">Regole delle categorie</div>
+    <p class="piccolo" style="margin-top:0">In ordine: vince la prima categoria con una parola trovata; poi la categoria Intesa. Valgono subito per l'import; i movimenti già presenti cambiano solo se li spunti nell'anteprima.</p>
+    <ul class="elenco regole">${s.cats.map((c, i) => `<li>
+      <div class="testa-regola"><strong style="flex:1">${esc(c.nome)}</strong>
+        <span class="frecce"><button type="button" data-su-c="${i}" ${i ? '' : 'disabled'}>↑</button><button type="button" data-giu-c="${i}" ${i < s.cats.length - 1 ? '' : 'disabled'}>↓</button></span>
+        ${c.nome === DA_ASSEGNARE ? '' : `<button type="button" class="piccolo-b" data-togli-c="${i}" title="Elimina la categoria">✕</button>`}</div>
+      ${c.nome === DA_ASSEGNARE ? '<p class="piccolo" style="margin:2px 0">quello che nessuna regola prende</p>' : `
+      <div>${c.parole.map((p, k) => `<span class="chip-parola">${esc(p)}<button type="button" data-via-c="${i}:parole:${k}">✕</button></span>`).join('')}
+        <span class="aggiungi-parola"><input placeholder="parola" data-nuova-c="${i}"><button type="button" data-aggiungi-c="${i}">＋</button></span></div>
+      <div>${c.intesa.map((p, k) => `<span class="chip-parola intesa">${esc(p)}<button type="button" data-via-c="${i}:intesa:${k}">✕</button></span>`).join('')}
+        <span class="aggiungi-parola"><select data-intesa-c="${i}"><option value="">＋ categoria Intesa…</option>${intesaViste.filter(x => c.intesa.indexOf(x) < 0).map(x => `<option>${esc(x)}</option>`).join('')}<option value="*">altra…</option></select></span></div>`}
+    </li>`).join('')}</ul>
+    <div class="azioni"><button type="button" id="cat-nuova">＋ nuova categoria</button></div>
+    ${tolte.length ? `<div class="avviso-box">${tolte.map(t => usate[t.nome] ? `"${esc(t.nome)}" ha ${usate[t.nome]} movimenti (24 mesi): spostali in
+      <select data-sposta="${esc(t.nome)}"><option value="">scegli…</option>${s.cats.map(c => `<option ${s.sposta[t.nome] === c.nome ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select>`
+      : `"${esc(t.nome)}" si elimina (nessun movimento)`).join('<br>')}</div>` : ''}
+    ${!tm.completi ? `<p class="piccolo testo-giallo">Anteprima solo sui movimenti dell'app (${esc(tm.errore || 'serve la rete')}).</p>` : ''}
+    ${cambiato ? '<div class="azioni"><button type="button" class="primario" id="cat-salva">Salva le regole</button><button type="button" id="cat-annulla">Annulla le modifiche</button></div>' : ''}
+    <div class="etichetta" style="margin-top:14px">Anteprima · movimenti già presenti che cambierebbero (${proposte.length})</div>
+    ${proposte.length ? `<div class="chips"><button type="button" class="chip chip-piccolo" id="cat-tutti">seleziona tutti</button><button type="button" class="chip chip-piccolo" id="cat-nessuno">nessuno</button></div>
+      <ul class="elenco anteprima-regole">${proposte.slice(0, 200).map(x => `<li><input type="checkbox" data-sel-c="${esc(x.m.id)}" ${s.sel[x.m.id] ? 'checked' : ''} aria-label="Aggiorna">
+        <span class="data-riga">${daChiave(x.m.d).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: '2-digit' })}</span>
+        <div class="corpo">${esc(x.m.desc)}<div class="piccolo">${esc(x.m.cat || '—')} → <strong>${esc(x.a)}</strong></div></div>
+        <div class="num">${euro.format(x.m.imp)}</div></li>`).join('')}</ul>
+      <div class="azioni"><button type="button" class="primario" id="cat-aggiorna" ${nSel ? '' : 'disabled'}>Aggiorna i selezionati (${nSel})</button></div>
+      ${cambiato ? '<p class="piccolo">Prima salva le regole, poi aggiorna i movimenti.</p>' : ''}`
+      : '<p class="piccolo">Nessun movimento cambierebbe categoria con le parole nuove.</p>'}
+    ${altre.length ? `<details style="margin-top:8px"><summary class="piccolo">Altri ${altre.length} movimenti con una categoria diversa da quella delle parole (forse corretti a mano): non si toccano</summary>
+      <ul class="elenco anteprima-regole">${altre.slice(0, 100).map(x => `<li><span class="data-riga">${daChiave(x.m.d).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: '2-digit' })}</span>
+        <div class="corpo">${esc(x.m.desc)}<div class="piccolo">${esc(x.m.cat || '—')} · le parole direbbero ${esc(x.a)}</div></div></li>`).join('')}</ul></details>` : ''}
+  </div>`;
+  const ridisegna = () => disegnaRegoleCategorie(box);
+  $$('[data-su-c]', box).forEach(b => { b.onclick = () => { const i = +b.dataset.suC; s.cats.splice(i - 1, 0, s.cats.splice(i, 1)[0]); ridisegna(); }; });
+  $$('[data-giu-c]', box).forEach(b => { b.onclick = () => { const i = +b.dataset.giuC; s.cats.splice(i + 1, 0, s.cats.splice(i, 1)[0]); ridisegna(); }; });
+  $$('[data-togli-c]', box).forEach(b => { b.onclick = () => { s.cats.splice(+b.dataset.togliC, 1); ridisegna(); }; });
+  $$('[data-via-c]', box).forEach(b => { b.onclick = () => { const q = b.dataset.viaC.split(':'); s.cats[+q[0]][q[1]].splice(+q[2], 1); ridisegna(); }; });
+  $$('[data-aggiungi-c]', box).forEach(b => {
+    b.onclick = () => {
+      const i = +b.dataset.aggiungiC, p = normalizza($('[data-nuova-c="' + i + '"]', box).value).replace(/[,;]/g, ' ').trim();
+      if (p.length < 3) { toast('Parola troppo corta'); return; }
+      if (s.cats[i].parole.indexOf(p) < 0) s.cats[i].parole.push(p);
+      ridisegna();
+    };
+  });
+  $$('[data-nuova-c]', box).forEach(inp => { inp.onkeydown = e => { if (e.key === 'Enter') $('[data-aggiungi-c="' + inp.dataset.nuovaC + '"]', box).click(); }; });
+  $$('[data-intesa-c]', box).forEach(sel => {
+    sel.onchange = () => {
+      let v = sel.value;
+      if (v === '*') v = (prompt('Categoria Intesa (come scritta nell\'export della banca)') || '').replace(/[;,]/g, ' ').trim();
+      if (v && s.cats[+sel.dataset.intesaC].intesa.indexOf(v) < 0) s.cats[+sel.dataset.intesaC].intesa.push(v);
+      ridisegna();
+    };
+  });
+  $$('[data-sposta]', box).forEach(sel => { sel.onchange = () => { s.sposta[sel.dataset.sposta] = sel.value; }; });
+  $('#cat-nuova', box).onclick = () => {
+    const nome = (prompt('Nome della nuova categoria') || '').trim();
+    if (!nome) return;
+    if (s.cats.some(c => normalizza(c.nome) === normalizza(nome))) { toast('Esiste già'); return; }
+    const iDa = s.cats.findIndex(c => c.nome === DA_ASSEGNARE);
+    s.cats.splice(iDa >= 0 ? iDa : s.cats.length, 0, { nome, vecchio: '', parole: [], intesa: [] });
+    ridisegna();
+  };
+  $$('[data-sel-c]', box).forEach(cb => { cb.onchange = () => { if (cb.checked) s.sel[cb.dataset.selC] = true; else delete s.sel[cb.dataset.selC]; ridisegna(); }; });
+  const tutti = $('#cat-tutti', box), nessuno = $('#cat-nessuno', box);
+  if (tutti) tutti.onclick = () => { proposte.forEach(x => { s.sel[x.m.id] = true; }); ridisegna(); };
+  if (nessuno) nessuno.onclick = () => { s.sel = {}; ridisegna(); };
+  const an = $('#cat-annulla', box);
+  if (an) an.onclick = () => { statoCat = null; ridisegna(); };
+  const sv = $('#cat-salva', box);
+  if (sv) sv.onclick = async () => {
+    if (!script10()) { toast(SERVE_V10); return; }
+    try {
+      const r = await api('categorie', { categorie: s.cats, sposta: s.sposta });
+      toast('Regole salvate' + (r.spostati ? ' · spostati ' + r.spostati + ' movimenti' : ''));
+      await sincronizza();
+      testiMov = null;
+      s.salvate = JSON.stringify(catDaDati());
+      s.cats = catDaDati();
+      ridisegna();
+    } catch (e) { toast('Non salvate: ' + (e.message || e)); }
+  };
+  const ag = $('#cat-aggiorna', box);
+  if (ag) ag.onclick = async () => {
+    if (!script10()) { toast(SERVE_V10); return; }
+    if (cambiato) { toast('Prima salva le regole'); return; }
+    const cambi = proposte.filter(x => s.sel[x.m.id]).map(x => ({ id: x.m.id, categoria: x.a }));
+    try {
+      const r = await api('ricategorizza', { cambi });
+      toast('Aggiornati ' + r.aggiornati + ' movimenti');
+      s.sel = {};
+      testiMov = null;
+      await sincronizza();
+      ridisegna();
+    } catch (e) { toast('Non aggiornati: ' + (e.message || e)); }
+  };
 }
 
 // ── Cibo: bilancio e calorie calibrate (dati dello script: dati.fisico) ──
@@ -2730,6 +3257,6 @@ function gruppoNav(nome) {
   if (SCHEDE_FINANZE.some(s => s[0] === nome)) return 'finanze';
   if (SCHEDE_CIBO.some(s => s[0] === nome) || nome === 'dieta') return 'cibo';
   if (SCHEDE_ALL.some(s => s[0] === nome)) return 'allenamento';
-  if (SCHEDE_FUORI.some(s => s[0] === nome)) return 'fuori';
+  if (SCHEDE_FUORI.some(s => s[0] === nome) || nome === 'tranquillita') return 'fuori';
   return nome;
 }
