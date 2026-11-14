@@ -131,7 +131,8 @@ function pianificaSync(ms) {
 async function sincronizza() {
   if (statoSync.stato === 'in corso') return;
   if (!config.url || !config.token) { statoSync.stato = 'da configurare'; aggiornaStato(); return; }
-  if (!navigator.onLine) { statoSync.stato = 'offline'; aggiornaStato(); return; }
+  // 14/11 (Daniele: sul tablet sempre "Offline"): dentro l'app del tablet navigator.onLine può restare falso anche col
+  // Wi-Fi acceso, e prima non si provava nemmeno. Ora si prova sempre; "Offline" solo se il collegamento fallisce davvero.
   statoSync.stato = 'in corso'; statoSync.errore = ''; aggiornaStato();
   try {
     // Pagine del quaderno: una alla volta (contengono l'immagine).
@@ -156,7 +157,8 @@ async function sincronizza() {
     if (tablet && inviate.length) tablet.aggiornaWidget();
     ridisegnaSeLibero();
   } catch (e) {
-    statoSync.stato = 'errore';
+    const rete = e instanceof TypeError || !navigator.onLine;   // fetch senza risposta = niente rete
+    statoSync.stato = rete ? 'offline' : 'errore';
     statoSync.errore = e.message || String(e);
   }
   aggiornaStato();
