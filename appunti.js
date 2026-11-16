@@ -656,6 +656,7 @@ function apMenu(vicino, voci) {
 function apChiudiEditor() {
   if (AP.ed) { AP.ed.salvaSubito(); AP.ed.distruggi(); }
   AP.ed = null; AP.aperto = null;
+  document.body.classList.remove('ap-tutto');
   apPaginaVuota();
 }
 
@@ -681,6 +682,15 @@ function apApri(id) {
   });
 }
 
+/** v11.1: si sta scrivendo? (la pagina aspetta a ricaricarsi per la versione nuova) */
+function apOccupato() { return !!(AP.ed && AP.ed.inUso && AP.ed.inUso()) || !!apRapidoAperto; }
+/** v11.1: prima di ricaricare: salva subito l'appunto aperto e aspetta che sia scritto (la lettura segue la scrittura). */
+async function apPrimaDiRicaricare() {
+  if (!AP.ed) return;
+  AP.ed.salvaSubito();
+  if (AP.aperto) await apLeggi(AP.aperto);
+}
+
 function apMontaEditor(box, id, rec) {
   const r = apRiga(id) || {};
   const sola = !!r['Eliminato il'];
@@ -691,13 +701,14 @@ function apMontaEditor(box, id, rec) {
         <button type="button" class="ap-icona" id="ap-fissa" title="Fissa in cima">📌</button>
         <button type="button" class="ap-icona" id="ap-piu" title="Altro">⋯</button>
         <button type="button" class="ap-icona ap-solo-largo" id="ap-larga" title="Pagina a tutta larghezza (nasconde le colonne a sinistra)">⤢</button>
+        <button type="button" class="ap-icona" id="ap-tutto" title="Tutto schermo: resta solo la pagina (Esc per uscire)">⛶</button>
         <button type="button" class="ap-icona ap-solo-telefono" id="ap-strumenti" title="Strumenti per scrivere">✎</button>
-        <span class="ap-salvato" id="ap-salvato"></span>
       </div>
       <input id="ap-titolo" class="ap-titolo-in" value="${esc(r.Titolo || '')}" placeholder="Titolo" ${sola ? 'disabled' : ''}>
     </div>
     <div id="ap-proposta"></div>
-    <div class="ap-editor" id="ap-editor"></div>`;
+    <div class="ap-editor" id="ap-editor"></div>
+    <button type="button" class="ap-tutto-btn" id="ap-tutto-btn" title="Strumenti (trascina per spostare)">✎</button>`;
   $('.ap-indietro', box).onclick = () => { AP.pannello = 'elenco'; apVai({ a: null }); };
   const ed = creaEditor($('#ap-editor', box), rec.pagina, { soloLettura: sola, salvataggio: pagina => apPaginaCambiata(id, pagina), spostaIn: apSpostaSelezione });
   ed.id = id;
@@ -714,7 +725,64 @@ function apMontaEditor(box, id, rec) {
   $('#ap-strumenti', box).onclick = () => { const e = $('#ap-editor'); e.classList.toggle('con-barra'); $('#ap-strumenti').classList.toggle('attivo', e.classList.contains('con-barra')); };
   ed.aggiornaTesta = () => apTestaEditor(id);
   ed.aggiornaTesta();
+  apMontaTutto(box, sola);
 }
+
+// ───────────────────────── v11.1: tutto schermo ─────────────────────────
+
+/** Entra/esce dal tutto schermo (la scelta si ricorda: riaprendo un appunto si torna come l'ultima volta). */
+function apTutto(si) {
+  document.body.classList.toggle('ap-tutto', !!si);
+  LS.set('apTutto', !!si);
+  const e = $('#ap-editor');
+  if (e) e.classList.remove('barra-su');
+}
+
+function apMontaTutto(box, sola) {
+  // nella barra degli strumenti: "esci dal tutto schermo" (visibile solo a tutto schermo)
+  const barra = $('.ed-barra', box);
+  if (barra) {
+    const esci = document.createElement('button');
+    esci.type = 'button'; esci.className = 'ap-esci-tutto'; esci.title = 'Esci dal tutto schermo (Esc)';
+    esci.innerHTML = '<span>⤡</span><small>esci</small>';
+    esci.onclick = () => apTutto(false);
+    barra.appendChild(esci);
+  }
+  $('#ap-tutto', box).onclick = () => apTutto(true);
+  const btn = $('#ap-tutto-btn', box);
+  const metti = (x, y) => {
+    const W = box.clientWidth || window.innerWidth, H = box.clientHeight || window.innerHeight;
+    x = Math.max(4, Math.min(W - 38, x)); y = Math.max(4, Math.min(H - 38, y));
+    btn.style.left = x + 'px'; btn.style.top = y + 'px';
+    return { x, y };
+  };
+  const pos = LS.get('apTuttoPos', null);
+  if (pos) { btn.style.left = pos.x + 'px'; btn.style.top = pos.y + 'px'; } else { btn.style.right = '8px'; btn.style.top = '8px'; }
+  // tocco = barra degli strumenti sopra la pagina (o via); trascinamento = sposta il pulsantino
+  btn.addEventListener('pointerdown', ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    const r0 = btn.getBoundingClientRect(), rb = box.getBoundingClientRect();
+    const dx = ev.clientX - r0.left, dy = ev.clientY - r0.top, x0 = ev.clientX, y0 = ev.clientY;
+    let mosso = false, ultimo = null;
+    try { btn.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
+    const muovi = e => {
+      if (!mosso && Math.hypot(e.clientX - x0, e.clientY - y0) < 8) return;
+      mosso = true; btn.style.right = '';
+      ultimo = metti(e.clientX - rb.left - dx, e.clientY - rb.top - dy);
+    };
+    const fine = () => {
+      btn.removeEventListener('pointermove', muovi); btn.removeEventListener('pointerup', fine); btn.removeEventListener('pointercancel', fine);
+      if (mosso) { if (ultimo) LS.set('apTuttoPos', ultimo); return; }
+      if (!sola) $('#ap-editor').classList.toggle('barra-su');
+    };
+    btn.addEventListener('pointermove', muovi); btn.addEventListener('pointerup', fine); btn.addEventListener('pointercancel', fine);
+  });
+  if (LS.get('apTutto', false)) apTutto(true);
+}
+
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Escape' && document.body.classList.contains('ap-tutto') && !document.querySelector('.ap-velo')) { ev.preventDefault(); apTutto(false); }
+});
 
 function apTestaEditor(id) {
   const r = apRiga(id) || {};
@@ -736,6 +804,7 @@ function apTestaEditor(id) {
 }
 
 function apStatoSalvato() {
+  // v11.1: l'indicatore nella barra dell'appunto è stato tolto (basta la testata: "N in coda" conta anche le pagine)
   const el = $('#ap-salvato');
   if (!el || !AP.ed) return;
   const rec = AP.ed.rec;
@@ -2023,5 +2092,5 @@ function apriRapido() {
 /** Lasciando la sezione Appunti: salva la pagina aperta e toglie la pagina a tutta larghezza. */
 function lasciaAppunti() {
   if (AP.ed) { AP.ed.salvaSubito(); AP.ed.distruggi(); AP.ed = null; AP.aperto = null; }
-  document.body.classList.remove('pagina-appunti');
+  document.body.classList.remove('pagina-appunti', 'ap-tutto');
 }

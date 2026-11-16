@@ -515,3 +515,24 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
   .ap-proposta .corpo { flex: 1 1 calc(100% - 34px); }
   .ap-proposta button { flex: 1; }
 }
+
+/* v11.1: Appunti a tutto schermo (⛶): resta solo la pagina; il pulsantino semitrasparente (trascinabile) richiama la barra
+   degli strumenti sopra la pagina, da cui si esce (anche con Esc). ⤢ toglie solo le colonne, questo toglie tutto. */
+body.ap-tutto .barra { display: none; }
+body.ap-tutto .ap-guscio { grid-template-columns: minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; }
+body.ap-tutto .ap-guscio > .ap-sez, body.ap-tutto .ap-guscio > .ap-elenco { display: none; }
+body.ap-tutto .ap-guscio > .ap-pagina { display: flex; }
+body.ap-tutto .ap-testa-app, body.ap-tutto #ap-proposta { display: none; }
+.ap-pagina { position: relative; }
+.ap-editor { position: relative; }
+body.ap-tutto .ap-editor > .ed-barra { display: none; }
+body.ap-tutto .ap-editor.barra-su > .ed-barra:not([hidden]) { display: flex; position: absolute; left: 0; right: 0; top: 0; z-index: 8;
+  background: rgba(23, 27, 33, .97); box-shadow: 0 6px 18px rgba(0, 0, 0, .5); padding-right: 56px; }
+body.ap-tutto .ap-editor > .ed-barra-testo:not([hidden]) { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; border-top: 1px solid var(--bordo); border-bottom: 0; }
+.ap-esci-tutto { display: none !important; }
+body.ap-tutto .ap-esci-tutto { display: flex !important; border-color: var(--accento); }
+.ap-tutto-btn { display: none; position: absolute; z-index: 9; width: 34px; height: 34px; min-height: 0; min-width: 0; padding: 0; border-radius: 10px;
+  font-size: 17px; line-height: 1; opacity: .45; background: rgba(40, 46, 56, .8); border: 1px solid var(--bordo); color: var(--testo);
+  touch-action: none; user-select: none; -webkit-user-select: none; }
+body.ap-tutto .ap-tutto-btn { display: flex; align-items: center; justify-content: center; }
+body.ap-tutto .ap-editor.barra-su ~ .ap-tutto-btn, .ap-tutto-btn:active { opacity: .9; }

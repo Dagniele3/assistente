@@ -3283,7 +3283,43 @@ function aggiornaBadgeFuori() {
 }
 
 // (sul server di prova, localhost, niente service worker: sennò le prove vedono i file vecchi)
-if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('sw.js').catch(() => {});
+// v11.1: la versione nuova è attiva alla PRIMA apertura. Quando il service worker nuovo prende il controllo la pagina
+// si ricarica una volta da sola, ma solo quando non si sta scrivendo (penna appoggiata, casella di testo, appunto
+// rapido o finestra aperti): prima salva l'appunto aperto; la coda delle modifiche sta già in localStorage e resta.
+let swRicarica = false;
+function sicuroRicaricare() {
+  if (document.hidden) return true;
+  const a = document.activeElement;
+  if (a && !a.disabled && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return false;
+  if (document.querySelector('.ap-velo')) return false;
+  if (typeof apOccupato === 'function' && apOccupato()) return false;
+  return true;
+}
+function versioneNuovaPronta() {
+  if (swRicarica) return;
+  try { if (Date.now() - Number(sessionStorage.getItem('swRicaricata') || 0) < 15000) return; } catch (e) { /* niente sessionStorage */ }
+  swRicarica = true;
+  const prova = async () => {
+    if (!sicuroRicaricare()) { setTimeout(prova, 1500); return; }
+    try { if (typeof apPrimaDiRicaricare === 'function') await apPrimaDiRicaricare(); } catch (e) { /* si ricarica comunque */ }
+    try { sessionStorage.setItem('swRicaricata', String(Date.now())); } catch (e) { /* niente */ }
+    location.reload();
+  };
+  prova();
+}
+if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
+  const sw = navigator.serviceWorker;
+  const giaControllata = !!sw.controller;   // prima visita: la pagina arriva già dalla rete, niente da ricaricare
+  sw.addEventListener('controllerchange', () => { if (giaControllata) versioneNuovaPronta(); });
+  sw.addEventListener('message', e => { if (e.data === 'nuova-versione' && e.source) e.source.postMessage('gestisco'); });
+  if (sw.startMessages) sw.startMessages();
+  sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    // la WebView del tablet resta aperta per giorni: controlla di nuovo ogni volta che la pagina torna visibile
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(() => {});
+}
+// v11.1: uscendo dalla pagina l'appunto aperto si salva subito (non dopo 1,2 s)
+document.addEventListener('visibilitychange', () => { if (document.hidden && typeof AP !== 'undefined' && AP.ed) AP.ed.salvaSubito(); });
 
 disegna();
 aggiornaStato();
