@@ -1,8 +1,8 @@
 // Service worker: tiene in cache i file dell'app per aprirla anche offline.
 // Strategia: risponde subito dalla cache e intanto scarica la versione nuova per il prossimo avvio.
 // Le chiamate ad Apps Script (altro dominio) non passano di qui.
-const CACHE = 'assistente-v10.1';
-const FILE = ['./', './index.html', './app.css', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE = 'assistente-v11';
+const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILE)).then(() => self.skipWaiting()));

@@ -25,7 +25,10 @@ let dati = LS.get('dati', null);
 let coda = LS.get('coda', []);
 let statoSync = { stato: 'idle', ultimo: LS.get('ultimoSync', null), errore: '' };
 
-const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti', 'Salute', 'Attività', 'Uscite'];
+const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti', 'Salute', 'Attività', 'Uscite', 'Appunti', 'Sezioni appunti'];
+// v11: le righe degli Appunti si inviano solo allo script v11 (quello vecchio le scarterebbe): fino ad allora restano in coda.
+const SCHEDE_V11 = ['Appunti', 'Sezioni appunti'];
+function script11() { return Number((dati && dati.versione) || 0) >= 11; }
 
 function datiVuoti() {
   const schede = {};
@@ -141,12 +144,15 @@ async function sincronizza() {
       coda = coda.filter(o => o !== op);
       LS.set('coda', coda);
     }
-    const inviate = coda.filter(o => o.tipo !== 'quaderno');
+    const inviate = coda.filter(o => o.tipo !== 'quaderno' && (SCHEDE_V11.indexOf(o.scheda) < 0 || script11()));
     if (inviate.length) {
+      inviate.forEach(o => { o._inviata = true; });   // v11: da qui non si uniscono più modifiche a queste operazioni
       await api('sync', { operazioni: inviate });
       coda = coda.filter(o => inviate.indexOf(o) < 0);
       LS.set('coda', coda);
     }
+    // v11: pagine degli appunti cambiate qui (un errore non ferma il resto della sincronizzazione)
+    if (script11()) { try { await appuntiInvia(); } catch (e) { statoSync.errore = 'Appunti: ' + (e.message || e); } }
     const fresco = await api('dati');
     dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server, versione: fresco.versione, batteria: fresco.batteria };
     coda.forEach(applicaLocale); // modifiche fatte durante l'invio
@@ -155,8 +161,10 @@ async function sincronizza() {
     LS.set('ultimoSync', statoSync.ultimo);
     statoSync.stato = 'ok';
     if (tablet && inviate.length) tablet.aggiornaWidget();
+    if (script11()) { try { await appuntiScarica(); } catch (e) { statoSync.errore = 'Appunti: ' + (e.message || e); } }
     ridisegnaSeLibero();
   } catch (e) {
+    coda.forEach(o => { delete o._inviata; });
     const rete = e instanceof TypeError || !navigator.onLine;   // fetch senza risposta = niente rete
     statoSync.stato = rete ? 'offline' : 'errore';
     statoSync.errore = e.message || String(e);
@@ -172,10 +180,11 @@ function aggiornaStato() {
   let testo;
   if (statoSync.stato === 'da configurare') testo = 'Da configurare';
   else if (statoSync.stato === 'in corso') testo = 'Sincronizzo…';
-  else if (coda.length) { testo = coda.length + ' in coda'; b.classList.add('coda'); }
+  else if (coda.length + apSporche) { testo = (coda.length + apSporche) + ' in coda'; b.classList.add('coda'); }
   else if (statoSync.stato === 'errore') { testo = 'Errore'; b.classList.add('errore'); }
   else testo = ora ? 'Aggiornato ' + ora : 'Mai sincronizzato';
-  if (statoSync.stato === 'offline' && !coda.length) testo = 'Offline' + (ora ? ' · ' + ora : '');
+  if (statoSync.stato === 'offline' && !coda.length && !apSporche) testo = 'Offline' + (ora ? ' · ' + ora : '');
+  if (typeof apStatoSalvato === 'function') apStatoSalvato();
   b.textContent = testo;
   b.title = statoSync.errore || 'Tocca per sincronizzare';
 }
@@ -184,6 +193,7 @@ function ridisegnaSeLibero() {
   const a = document.activeElement;
   if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && $('#vista').contains(a)) return;
   if (document.body.classList.contains('quaderno-aperto')) return;
+  if (AP.ed && AP.ed.inUso()) return;   // v11: mentre si scrive in un appunto
   disegna();
 }
 
@@ -344,6 +354,7 @@ const VISTE = {
   cibo: vistaCibo, dieta: vistaCibo, piano: vistaPiano, controlli: vistaControlli, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
   fuori: vistaFuori, uscita: vistaUscita, anno: vistaAnnoFuori, vola: vistaSiVola, // v8
   tranquillita: vistaTranquillita, // v10
+  regole: vistaRegole, appunti: vistaAppunti, // v11
 };
 
 function percorso() {
@@ -354,8 +365,10 @@ function percorso() {
 
 function disegna() {
   const p = percorso();
-  if (p.nome === 'quaderno') { apriQuaderno(p.query.get('dest') || 'Nessuna'); return; }
+  // v11: il vecchio Quaderno è diventato l'appunto rapido (pop-up sopra la pagina, finisce in Appunti → Da sistemare)
+  if (p.nome === 'quaderno') { history.replaceState(null, '', '#/'); apriRapidoOvunque(); disegna(); return; }
   chiudiQuadernoSeAperto();
+  if (p.nome !== 'appunti') lasciaAppunti();
   const vista = VISTE[p.nome] || vistaHome;
   aggiornaBadgeFuori(); // v8
   $$('#nav a').forEach(a => a.classList.toggle('attiva', a.getAttribute('href') === '#/' + gruppoNav(p.nome)));
@@ -365,8 +378,14 @@ function disegna() {
   window.scrollTo(0, 0);
 }
 
-function bottonePenna(dest) {
-  return '<button class="penna" type="button" title="Scrivi a penna" onclick="location.hash=\'#/quaderno?dest=' + esc(dest) + '\'">✎</button>';
+function bottonePenna() {
+  return '<button class="penna" type="button" title="Appunto rapido (finisce in Appunti → Da sistemare)" onclick="apriRapidoOvunque()">✎</button>';
+}
+
+/** v11: appunto rapido. Nell'app del tablet quello nativo (più veloce), altrove il pop-up della web app. */
+function apriRapidoOvunque() {
+  if (tablet && tablet.appuntoRapido) { try { tablet.appuntoRapido(); return; } catch (e) { /* app vecchia: pop-up web */ } }
+  apriRapido();
 }
 
 // ───────────────────────── Viste ─────────────────────────
@@ -458,11 +477,9 @@ function vistaFinanze(main, query) {
       <div class="num ${c.budget && c.speso > c.budget ? 'testo-giallo' : ''}">${euro0.format(c.speso)}${c.budget ? ' <span class="piccolo">/ ' + euro0.format(c.budget) + '</span>' : ''}</div></li>`).join('')
       : '<li class="vuoto">Nessuna spesa nel mese.</li>'}
       <li class="toccabile" data-vai="#/movimenti?mese=${mese}"><div class="corpo piccolo">tocca una categoria → movimenti</div><div>›</div></li></ul>
-    <div class="azioni"><a class="bottone" href="#/movimenti?mese=${mese}">Tutti i movimenti</a><a class="bottone primario" href="#/budget">Budget</a></div>
+    <div class="azioni azioni-riga"><a class="bottone" href="#/movimenti?mese=${mese}">Tutti i movimenti</a><a class="bottone" href="#/bollette">Bollette e utenze</a><a class="bottone" href="#/budget">Budget</a><a class="bottone" href="#/mutuo">Mutuo</a></div>
 
     ${sezioneDaAssegnare()}
-
-    <div class="azioni"><a class="bottone" href="#/bollette">Bollette e utenze</a><a class="bottone" href="#/mutuo">Mutuo</a></div>
 
     <h2>Ultimi movimenti</h2>
     <ul class="elenco carta">${recenti.length ? recenti.map(m => `<li>
@@ -579,7 +596,7 @@ function disegnaMovimenti(main) {
       <span>${nSel} selezionati</span><strong class="num">${euro.format(sommaSel)}</strong>
       <select id="sel-cat" aria-label="Assegna categoria"><option value="">categoria ▾</option>${categorie.map(c => `<option>${esc(c)}</option>`).join('')}</select>
       <button type="button" class="piccolo-b" id="sel-annulla">✕</button></div>
-    <div id="regole-box"></div>`;
+    ${linkRegole('categorie')}`;
 
   const ridisegna = () => { const y = window.scrollY; disegnaMovimenti(main); window.scrollTo(0, y); };
   $('#mov-mese', main).onchange = e => { s.mese = e.target.value; s.sel = {}; ridisegna(); };
@@ -636,7 +653,6 @@ function disegnaMovimenti(main) {
       };
     }
   }
-  disegnaRegoleCategorie($('#regole-box', main));
   $('#sel-cat', main).onchange = e => {
     const c = e.target.value;
     if (!c) return;
@@ -654,7 +670,25 @@ function disegnaMovimenti(main) {
 
 // Schede di Finanze (SPEC v6 §F1) ────────────────────────────
 
-const SCHEDE_FINANZE = [['finanze', 'Panoramica'], ['movimenti', 'Movimenti'], ['budget', 'Budget'], ['bollette', 'Bollette'], ['mutuo', 'Mutuo']];
+// v11 §4: prima le schede per vedere, poi Regole (per modificare), poi budget e mutuo.
+const SCHEDE_FINANZE = [['finanze', 'Panoramica'], ['movimenti', 'Movimenti'], ['bollette', 'Bollette'], ['regole', 'Regole'], ['budget', 'Budget'], ['mutuo', 'Mutuo']];
+
+/** v11 §4: link piccolo in fondo a Movimenti e Bollette verso la scheda Regole (vai = riquadro da mostrare). */
+function linkRegole(vai) {
+  return `<p class="link-regole"><a href="#/regole?vai=${vai}">✎ modifica le regole ›</a></p>`;
+}
+
+/** v11 §4: scheda Regole = "Regole delle categorie" (era in Movimenti) + "Gruppi bollette" (era in Bollette), così com'erano. */
+function vistaRegole(main, query) {
+  main.innerHTML = `<div class="testata"><h1>Regole</h1></div>
+    ${schedeFinanze('regole')}
+    <div id="regole-box"></div>
+    <div id="gb-box"></div>`;
+  const vai = query && query.get('vai');
+  const scorri = id => { const el = document.getElementById(id); if (el) el.scrollIntoView(); };
+  disegnaRegoleCategorie($('#regole-box', main)).then(() => { if (vai === 'categorie') scorri('regole-categorie'); });
+  disegnaGruppiBollette($('#gb-box', main)).then(() => { if (vai === 'bollette') scorri('gruppi-bollette'); });
+}
 
 function schedeFinanze(attiva) {
   return `<nav class="schede-fin">${SCHEDE_FINANZE.map(s => `<a href="#/${s[0]}" class="${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`).join('')}</nav>`;
@@ -882,12 +916,11 @@ function vistaBollette(main, query) {
         return `<div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
           : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>`; })()}
     </div>` : ''}
-    <div id="gb-box"></div>`;
+    ${linkRegole('bollette')}`;
   const vai = (gr, m) => { location.hash = '#/bollette?' + new URLSearchParams(Object.assign(gr ? { gruppo: gr } : {}, { mesi: m || mesiP })).toString(); };
   $$('[data-gruppo]', main).forEach(li => { li.onclick = () => vai(li.dataset.gruppo === scelto ? '' : li.dataset.gruppo); });
   // v10 §8: tocco su un movimento del Dettaglio = scorciatoie "Togli da <gruppo>" / "Metti in un gruppo…" (e "Apri il movimento").
-  $$('[data-mov]', main).forEach(li => { li.onclick = () => scorciatoiaBolletta(li, li.dataset.mov, $('#gb-box', main)); });
-  disegnaGruppiBollette($('#gb-box', main));
+  $$('[data-mov]', main).forEach(li => { li.onclick = () => scorciatoiaBolletta(li, li.dataset.mov); });
   const tg = $('#bo-togli', main);
   if (tg) tg.onclick = () => vai('');
   $('#bo-mesi', main).onchange = e => { LS.set('bolletteMesi', Number(e.target.value)); vai(scelto, e.target.value); };
@@ -1115,7 +1148,6 @@ function vistaScadenze(main, query) {
       </div>
       <button class="primario" type="submit">Aggiungi</button>
     </form>
-    <p class="piccolo">Le scadenze future vanno anche nel Google Calendar (promemoria ai giorni di preavviso e il giorno stesso) quando lo script del foglio è alla versione 9.</p>
     ${bottonePenna('Scadenze')}`;
 
   const form = $('#f-scad');
@@ -2162,6 +2194,7 @@ function chiudiQuadernoSeAperto() {
 if (/AssistenteTablet/.test(navigator.userAgent)) document.body.classList.add('incorporata');
 
 $('#stato').onclick = () => sincronizza();
+apContaSporche().then(aggiornaStato);   // v11: pagine degli appunti ancora da inviare
 window.addEventListener('hashchange', disegna);
 window.addEventListener('online', () => pianificaSync(0));
 window.addEventListener('offline', () => { statoSync.stato = 'offline'; aggiornaStato(); });
@@ -3032,7 +3065,7 @@ async function disegnaGruppiBollette(box) {
  * Scorciatoie dal Dettaglio (tocco su un movimento): "Togli da <gruppo>" (propone una parola esclusa) o "Metti in un gruppo…"
  * (propone la parola da aggiungere). Cambiano solo i gruppi in modifica: si vede l'anteprima e si salva con "Salva".
  */
-async function scorciatoiaBolletta(li, idMov, box) {
+async function scorciatoiaBolletta(li, idMov) {
   const vecchio = $('.scorciatoia', li.parentNode);
   if (vecchio) { const era = vecchio.dataset.mov; vecchio.remove(); if (era === idMov) return; }
   const tm = await caricaTestiMov();
@@ -3055,7 +3088,8 @@ async function scorciatoiaBolletta(li, idMov, box) {
       con la parola <input value="${esc(propostaSi)}" id="sc-si"><button type="button" id="sc-metti">Metti</button></div>
     <div class="azioni"><a class="bottone" href="#/movimenti?id=${encodeURIComponent(idMov)}">Apri il movimento</a></div>`;
   li.after(div);
-  const vaiAnteprima = () => { disegnaGruppiBollette(box).then(() => { const g = $('#gruppi-bollette'); if (g) g.scrollIntoView(); }); toast('Controlla l\'anteprima e premi Salva'); };
+  // v11 §4: i Gruppi bollette stanno nella scheda Regole: la modifica (statoGB) resta in sospeso e si vede lì, con l'anteprima.
+  const vaiAnteprima = () => { location.hash = '#/regole?vai=bollette'; toast('Controlla l\'anteprima e premi Salva'); };
   const t = $('#sc-togli', div);
   if (t) t.onclick = () => { const p = testoBol($('#sc-no', div).value).trim(); if (p.length < 2) return; if (s.gruppi[gi].no.indexOf(p) < 0) s.gruppi[gi].no.push(p); div.remove(); vaiAnteprima(); };
   $('#sc-metti', div).onclick = () => {
@@ -3248,7 +3282,8 @@ function aggiornaBadgeFuori() {
   a.innerHTML = 'Fuori' + (k ? ` <span class="badge">${k}</span>` : '');
 }
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+// (sul server di prova, localhost, niente service worker: sennò le prove vedono i file vecchi)
+if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 disegna();
 aggiornaStato();
@@ -3260,5 +3295,6 @@ function gruppoNav(nome) {
   if (SCHEDE_CIBO.some(s => s[0] === nome) || nome === 'dieta') return 'cibo';
   if (SCHEDE_ALL.some(s => s[0] === nome)) return 'allenamento';
   if (SCHEDE_FUORI.some(s => s[0] === nome) || nome === 'tranquillita') return 'fuori';
+  if (nome === 'quaderno') return 'appunti';
   return nome;
 }
