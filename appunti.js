@@ -234,9 +234,16 @@ function vistaAppunti(main, query) {
     main.innerHTML = `<div class="ap-guscio">
       <aside class="ap-col ap-sez" id="ap-sez"></aside>
       <section class="ap-col ap-elenco" id="ap-elenco"></section>
-      <section class="ap-col ap-pagina" id="ap-pagina"></section></div>`;
+      <section class="ap-col ap-pagina" id="ap-pagina"></section>
+      <div class="ap-velo-pann"></div>
+      <div class="ap-man" data-m="s" title="Trascina per allargare o stringere · doppio tocco = larghezza iniziale"><span class="ap-man-fumo"></span></div>
+      <div class="ap-man" data-m="e" title="Trascina per allargare o stringere · doppio tocco = larghezza iniziale"><span class="ap-man-fumo"></span></div></div>`;
     guscio = $('.ap-guscio', main);
     if (LS.get('apLarga', false)) guscio.classList.add('ap-larga');
+    // v12.2: maniglie tra le colonne e velo del pannello (finestra stretta: tocco fuori dal pannello = chiude)
+    $$('.ap-man', guscio).forEach(m => apManiglia(m, m.dataset.m));
+    $('.ap-velo-pann', guscio).addEventListener('pointerdown', ev => { ev.preventDefault(); apPannello(false); });
+    apColonne();
   }
   guscio.dataset.pannello = AP.pannello;
   apDisegnaSezioni();
@@ -245,7 +252,10 @@ function vistaAppunti(main, query) {
   else if (!aperto && AP.aperto) apChiudiEditor();
   else if (!aperto && !$('#ap-pagina .ap-vuota', main)) apPaginaVuota();
   else if (AP.ed) AP.ed.aggiornaTesta();
+  apSistemaPannello(aperto, !!aperto && aperto !== apUltimoAperto);
+  apUltimoAperto = aperto;
 }
+let apUltimoAperto = null;
 
 function apVai(param, sostituisci) {
   const q = new URLSearchParams();
@@ -306,7 +316,7 @@ function apDisegnaSezioni() {
     v.onclick = e => {
       if (e.target.closest('.ap-menu-btn')) return;
       AP.cerca = ''; AP.pannello = 'elenco';
-      apVai({ s: v.dataset.sel, a: innerWidth < 900 ? null : AP.aperto });
+      apVai({ s: v.dataset.sel, a: AP.aperto });   // v12.2: l'appunto aperto resta (prima, sotto i 900 px, si chiudeva)
     };
     if (v.dataset.sezione) {
       v.insertAdjacentHTML('beforeend', '<button type="button" class="ap-menu-btn" title="Sezione: rinomina, colore, sposta, elimina">⋯</button>');
@@ -330,19 +340,18 @@ function apDisegnaElenco() {
   const titolo = AP.cerca ? 'Ricerca «' + esc(AP.cerca) + '» · ' + l.length : esc(apNomeSel(AP.sel));
   const cestino = AP.sel === 'cestino' && !AP.cerca;
   box.innerHTML = `<div class="ap-testa-elenco">
-      <button type="button" class="ap-indietro" data-p="sezioni">‹</button>
       <h2>${titolo}</h2>
       ${cestino ? '' : `<select id="ap-ordine" aria-label="Ordine"><option value="modifica" ${AP.ordine === 'modifica' ? 'selected' : ''}>ultima modifica</option><option value="mano" ${AP.ordine === 'mano' ? 'selected' : ''}>a mano</option></select>`}
     </div>
     <ul class="ap-lista">${l.map(r => apVoceElenco(r, cestino)).join('') || `<li class="vuoto">${AP.cerca ? 'Nessun appunto trovato' : cestino ? 'Il cestino è vuoto' : 'Nessun appunto qui. ＋ per scriverne uno.'}</li>`}</ul>`;
   const o = $('#ap-ordine', box);
   if (o) o.onchange = () => { AP.ordine = o.value; LS.set('apOrdine', o.value); apDisegnaElenco(); };
-  $('.ap-indietro', box).onclick = () => { AP.pannello = 'sezioni'; $('.ap-guscio').dataset.pannello = 'sezioni'; };
   $$('.ap-lista li[data-id]', box).forEach(li => {
     const id = li.dataset.id;
     li.onclick = e => {
       if (e.target.closest('[data-az]')) return;
       if (li._trascinato) { li._trascinato = false; return; }
+      if (apStretto()) apPannello(false);
       apVai({ a: id });
     };
     $$('[data-az]', li).forEach(b => b.onclick = e => {
@@ -752,12 +761,11 @@ function apMontaEditor(box, id, rec) {
   const sola = !!r['Eliminato il'];
   box.innerHTML = `<div class="ap-testa-app">
       <div class="ap-dove-riga">
-        <button type="button" class="ap-indietro" title="Indietro">‹</button>
         <span class="piccolo">Sezione</span><select id="ap-sez-sel"></select><span class="ap-sotto-sep">›</span><select id="ap-sotto-sel"></select>
         <button type="button" class="ap-icona" id="ap-fissa" title="Fissa in cima">📌</button>
         <button type="button" class="ap-icona" id="ap-piu" title="Altro">⋯</button>
         <span class="ap-vista-grp" role="group" aria-label="Vista">
-          <button type="button" class="ap-vtg ap-solo-largo" id="ap-v-sez" title="Sezioni: mostra o nasconde le colonne a sinistra"><span class="g">▤</span><span class="t">Sezioni</span></button>
+          <button type="button" class="ap-vtg" id="ap-v-sez" title="Sezioni: mostra o nasconde le colonne a sinistra"><span class="g">▤</span><span class="t">Sezioni</span></button>
           <button type="button" class="ap-vtg" id="ap-v-ind" title="Indice dei titoletti"><span class="g">☰</span><span class="t">Indice</span></button>
           <button type="button" class="ap-vtg" id="ap-v-tutto" title="Schermo intero: resta solo la pagina (Esc per uscire)"><span class="g">⛶</span><span class="t">Schermo intero</span></button>
         </span>
@@ -775,7 +783,6 @@ function apMontaEditor(box, id, rec) {
       <button type="button" data-s="tutto" class="acceso" title="Esci dallo schermo intero (Esc)">⛶<small>esci</small></button>
       <button type="button" data-s="apri" class="ripiegata" title="Strumenti (tocca per aprire la striscia)">✎<i>⛶</i></button>
     </div>`;
-  $('.ap-indietro', box).onclick = () => { AP.pannello = 'elenco'; apVai({ a: null }); };
   const ed = creaEditor($('#ap-editor', box), rec.pagina, { soloLettura: sola, salvataggio: pagina => apPaginaCambiata(id, pagina), spostaIn: apSpostaSelezione });
   ed.id = id;
   ed.rec = rec;
@@ -786,7 +793,12 @@ function apMontaEditor(box, id, rec) {
   $('#ap-fissa', box).onclick = () => { const x = apRiga(id); apSalvaRiga(id, { 'Fissato': !(x && x.Fissato === true) }, true); apAggiornaTutto(); };
   $('#ap-piu', box).onclick = e => apMenuAppunto(id, e.currentTarget);
   // v12.1: Sezioni acceso = colonne a sinistra visibili (il contrario del vecchio ⤢ "a tutta larghezza"); si ricorda come prima
-  $('#ap-v-sez', box).onclick = () => { const g = $('.ap-guscio'); g.classList.toggle('ap-larga'); LS.set('apLarga', g.classList.contains('ap-larga')); apStatoVista(); };
+  // v12.2: in finestra stretta (tablet in verticale, telefono) apre/chiude il pannello sopra la pagina, che non si ricorda
+  $('#ap-v-sez', box).onclick = () => {
+    const g = $('.ap-guscio');
+    if (apStretto()) { apPannello(!g.classList.contains('ap-pannello-su')); return; }
+    g.classList.toggle('ap-larga'); LS.set('apLarga', g.classList.contains('ap-larga')); apColonne(); apStatoVista();
+  };
   $('#ap-v-ind', box).onclick = () => { if (AP.ed && AP.ed.impostaIndice) AP.ed.impostaIndice(!AP.ed.indiceAperto); };
   // telefono: si legge; la barra degli strumenti compare con ✎
   $('#ap-strumenti', box).onclick = () => { const e = $('#ap-editor'); e.classList.toggle('con-barra'); $('#ap-strumenti').classList.toggle('attivo', e.classList.contains('con-barra')); };
@@ -796,12 +808,151 @@ function apMontaEditor(box, id, rec) {
   apMontaTutto(box, sola);
 }
 
+// ───────────────────────── v12.2: finestra stretta e colonne ridimensionabili ─────────────────────────
+// SPEC v12.2 §3–§4. Finestra stretta = fino a 899 px (tablet in verticale ~690 px, telefono, PC stretto): una colonna sola,
+// la pagina; ▤ Sezioni apre sezioni + elenco come pannello da sinistra SOPRA la pagina (velo scuro: tocco fuori = chiude,
+// tocco su un appunto = lo apre e chiude il pannello). Senza un appunto aperto il pannello resta aperto (ap-fisso).
+// Larghezze: --ap-ws (sezioni), --ap-we (elenco), --ap-wi (indice) sulla radice; le maniglie le cambiano col dito o col
+// mouse (la penna no: scrive), doppio tocco = larghezza iniziale. Ricordate su questo dispositivo in LS "apColonne",
+// separate per orientamento: "oriz" (finestra più larga che alta: tablet orizzontale, PC) e "vert".
+// Limiti: ogni colonna tra 140 px e il 45 % della finestra; la pagina (a destra di sezioni ed elenco) mai sotto il 50 %;
+// l'indice, che sta sopra la pagina, ne lascia visibile almeno il 25 % della finestra. Nella finestra stretta il pannello sta sopra la pagina: colonne fino al 60 % e insieme fino al 92 %,
+// indice fino all'85 %.
+const AP_STRETTO = 899;
+function apStretto() { return innerWidth <= AP_STRETTO; }
+function apChiaveCol() { return innerWidth >= innerHeight ? 'oriz' : 'vert'; }
+const AP_NOMI_COL = { s: 'sezioni', e: 'elenco', i: 'indice' };
+/** Larghezze iniziali (quelle di prima della v12.2; in finestra stretta il pannello è l'85 %). */
+function apColBase() {
+  const W = innerWidth;
+  if (apStretto()) { const t = Math.round(W * 0.85), sz = Math.max(140, Math.round(t * 0.42)); return { s: sz, e: Math.max(140, t - sz), i: 260 }; }
+  return W > 1200 ? { s: 270, e: 300, i: 260 } : { s: 230, e: 260, i: 260 };
+}
+/** Riporta le larghezze nei limiti; "fermo" = la colonna che si sta trascinando (le altre restano come sono). */
+function apColLimita(L, fermo) {
+  const W = innerWidth, min = Math.min(140, Math.round(W * 0.4)), st = apStretto();
+  const max = q => Math.round(W * (st ? (q === 'i' ? 0.85 : 0.6) : 0.45));
+  ['s', 'e', 'i'].forEach(q => { L[q] = Math.max(min, Math.min(max(q), Math.round(L[q]))); });
+  if (st) {
+    const tot = Math.round(W * 0.92);
+    if (L.s + L.e > tot) { if (fermo === 's') L.s = tot - L.e; else L.e = Math.max(min, tot - L.s); }
+    return L;
+  }
+  const g = $('.ap-guscio'), tutto = document.body.classList.contains('ap-tutto');
+  const conCol = !tutto && g && !g.classList.contains('ap-larga'), conInd = !!(AP.ed && AP.ed.indiceAperto);
+  // la pagina (lo spazio a destra delle colonne) non scende sotto il 50 %: cede la colonna trascinata, se no l'elenco
+  const libero = Math.round(W * 0.5);
+  if (conCol && L.s + L.e > libero) { const q = fermo === 's' ? 's' : 'e'; L[q] = Math.max(min, libero - L[q === 's' ? 'e' : 's']); }
+  // l'indice sta sopra la pagina: lascia sempre visibile almeno un quarto della finestra (con le larghezze iniziali sul
+  // tablet orizzontale resta il 32 %, come prima della v12.2)
+  if (conInd) {
+    const spazio = W - (conCol ? L.s + L.e : 0) - Math.round(W * 0.25);
+    if (L.i > spazio) { if (fermo === 's' || fermo === 'e') L[fermo] = Math.max(min, L[fermo] - (L.i - spazio)); else L.i = Math.max(min, spazio); }
+  }
+  return L;
+}
+/** Calcola e applica le larghezze (salvate per questo orientamento, oppure quelle iniziali). */
+function apColonne(L, fermo) {
+  if (!L) { const salv = LS.get('apColonne', {})[apChiaveCol()] || {}; L = Object.assign(apColBase(), salv); }
+  L = apColLimita(Object.assign({}, L), fermo);
+  AP.col = L;
+  const r = document.documentElement.style;
+  r.setProperty('--ap-ws', L.s + 'px'); r.setProperty('--ap-we', L.e + 'px'); r.setProperty('--ap-wi', L.i + 'px');
+  return L;
+}
+function apColSalva(q, v) {
+  const tutte = LS.get('apColonne', {}), k = apChiaveCol();
+  tutte[k] = Object.assign({}, tutte[k] || {});
+  if (v == null) delete tutte[k][q]; else tutte[k][q] = v;
+  LS.set('apColonne', tutte);
+}
+/**
+ * Maniglia di una colonna (q = 's', 'e', 'i'): si trascina col dito o col mouse; la penna passa oltre (sulla pagina
+ * scrive). Doppio tocco = larghezza iniziale. Mentre si trascina il fumetto dice la larghezza.
+ */
+function apManiglia(el, q) {
+  let ultimoTocco = 0;
+  const fumo = el.querySelector('.ap-man-fumo');
+  el.addEventListener('pointerdown', ev => {
+    if (ev.pointerType === 'pen') return;
+    ev.preventDefault(); ev.stopPropagation();
+    if (ev.timeStamp - ultimoTocco < 350) {   // doppio tocco
+      ultimoTocco = 0; apColSalva(q, null); apColonne();
+      toast(AP_NOMI_COL[q][0].toUpperCase() + AP_NOMI_COL[q].slice(1) + ': larghezza iniziale');
+      return;
+    }
+    ultimoTocco = ev.timeStamp;
+    const L0 = Object.assign({}, AP.col || apColonne()), x0 = ev.clientX, verso = q === 'i' ? -1 : 1;
+    let mosso = false, raf = 0, ultimo = null;
+    try { el.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
+    el.classList.add('trascino');
+    const scrivi = v => { if (fumo) fumo.innerHTML = AP_NOMI_COL[q] + ' · ' + v + ' px<small>doppio tocco = ' + apColBase()[q] + ' px</small>'; };
+    scrivi(L0[q]);
+    const muovi = e => {
+      const d = (e.clientX - x0) * verso;
+      if (!mosso && Math.abs(d) < 4) return;
+      mosso = true; ultimo = d;
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; const L = Object.assign({}, L0); L[q] = L0[q] + ultimo; scrivi(apColonne(L, q)[q]); });
+    };
+    const fine = () => {
+      el.removeEventListener('pointermove', muovi); el.removeEventListener('pointerup', fine); el.removeEventListener('pointercancel', fine);
+      el.classList.remove('trascino');
+      if (mosso) { ultimoTocco = 0; if (raf) { cancelAnimationFrame(raf); raf = 0; const L = Object.assign({}, L0); L[q] = L0[q] + ultimo; apColonne(L, q); } apColSalva(q, AP.col[q]); }
+    };
+    el.addEventListener('pointermove', muovi); el.addEventListener('pointerup', fine); el.addEventListener('pointercancel', fine);
+  });
+}
+/** Finestra stretta: apre/chiude il pannello di sezioni + elenco (non si chiude se non c'è un appunto aperto). */
+function apPannello(si) {
+  const g = $('.ap-guscio');
+  if (!g) return;
+  if (!si && g.classList.contains('ap-fisso')) return;
+  if (si) apColonne();
+  g.classList.toggle('ap-pannello-su', !!si);
+  apStatoVista();
+}
+/** Dopo ogni navigazione e ogni cambio di misura: pannello fisso senza appunto, chiuso quando se ne apre uno nuovo. */
+function apSistemaPannello(aperto, nuovo) {
+  const g = $('.ap-guscio');
+  if (!g) return;
+  const fisso = apStretto() && !aperto && !document.body.classList.contains('ap-tutto');
+  g.classList.toggle('ap-fisso', fisso);
+  if (fisso) g.classList.add('ap-pannello-su');
+  else if (nuovo) g.classList.remove('ap-pannello-su');
+  apStatoVista();
+}
+// Girando il tablet (o allargando la finestra): larghezze dell'orientamento giusto; passando da larga a stretta (o
+// viceversa) il pannello si chiude e l'indice segue la regola del modo nuovo. L'appunto aperto non si tocca.
+let apModoStretto = apStretto();
+function apFinestra() {
+  // solo con la pagina Appunti montata (il ResizeObserver scatta anche al caricamento, prima di app.js); il guscio
+  // nuovo si sistema da solo in vistaAppunti
+  if (typeof LS === 'undefined' || !document.querySelector('.ap-guscio')) return;
+  const st = apStretto();
+  if (st !== apModoStretto) {
+    const g = $('.ap-guscio');
+    if (g) g.classList.remove('ap-pannello-su');
+    if (AP.ed && AP.ed.cambioModo) AP.ed.cambioModo();
+  }
+  apModoStretto = st;
+  apColonne();
+  if ($('.ap-guscio')) apSistemaPannello(AP.aperto, false);
+}
+let apFinestraRaf = 0;
+const apFinestraPoi = () => { cancelAnimationFrame(apFinestraRaf); apFinestraRaf = requestAnimationFrame(apFinestra); };
+window.addEventListener('resize', apFinestraPoi);
+// l'evento resize può arrivare a metà rotazione, con la misura vecchia: la pagina che cambia misura lo ridice sempre
+if (window.ResizeObserver) new ResizeObserver(apFinestraPoi).observe(document.documentElement);
+
 // ───────────────────────── v11.1: tutto schermo ─────────────────────────
 
 /** Entra/esce dal tutto schermo (la scelta si ricorda: riaprendo un appunto si torna come l'ultima volta). */
 function apTutto(si) {
   document.body.classList.toggle('ap-tutto', !!si);
   document.body.classList.remove('ap-cassetto');
+  const g = $('.ap-guscio');
+  if (g && !g.classList.contains('ap-fisso')) g.classList.remove('ap-pannello-su');
   LS.set('apTutto', !!si);
   const e = $('#ap-editor');
   if (e) e.classList.remove('barra-su');
@@ -814,10 +965,10 @@ function apTutto(si) {
  */
 function apStatoVista() {
   const g = $('.ap-guscio'), tutto = document.body.classList.contains('ap-tutto');
-  const sez = tutto ? document.body.classList.contains('ap-cassetto') : !!(g && !g.classList.contains('ap-larga'));
+  const sez = tutto ? document.body.classList.contains('ap-cassetto') : apStretto() ? !!(g && g.classList.contains('ap-pannello-su')) : !!(g && !g.classList.contains('ap-larga'));
   const ind = !!(AP.ed && AP.ed.indiceAperto), barra = !!($('#ap-editor') && $('#ap-editor').classList.contains('barra-su'));
   const metti = (sel, si) => { const b = $(sel); if (b) { b.classList.toggle('acceso', !!si); b.setAttribute('aria-pressed', si ? 'true' : 'false'); } };
-  metti('#ap-v-sez', g && !g.classList.contains('ap-larga')); metti('#ap-v-ind', ind); metti('#ap-v-tutto', tutto);
+  metti('#ap-v-sez', !tutto ? sez : g && !g.classList.contains('ap-larga')); metti('#ap-v-ind', ind); metti('#ap-v-tutto', tutto);
   metti('#ap-striscia [data-s="sez"]', sez); metti('#ap-striscia [data-s="ind"]', ind); metti('#ap-striscia [data-s="barra"]', barra);
   const st = $('#ap-striscia');
   if (st) {
@@ -837,7 +988,7 @@ function apMontaTutto(box, sola) {
   const azione = s => {
     const e = $('#ap-editor');
     if (s === 'barra') { if (!sola && e) e.classList.toggle('barra-su'); }
-    if (s === 'sez') document.body.classList.toggle('ap-cassetto');
+    if (s === 'sez') { document.body.classList.toggle('ap-cassetto'); apColonne(); }
     if (s === 'ind' && AP.ed && AP.ed.impostaIndice) AP.ed.impostaIndice(!AP.ed.indiceAperto);
     if (s === 'tutto') { apTutto(false); return; }
     if (s === 'apri') LS.set('apStrisciaRipiegata', false);
@@ -1534,7 +1685,9 @@ function creaEditor(box, pagina, opz) {
       <div class="ed-info"></div>
       <div class="ed-barretta" title="Trascina per andare in un altro punto della pagina"><span></span></div>
       <div class="ed-fumetto" hidden></div>
+      <div class="ed-velo"></div>
       <div class="ed-indice" hidden></div>
+      <div class="ap-man ed-ind-man" title="Trascina per allargare o stringere l'indice · doppio tocco = larghezza iniziale"><span class="ap-man-fumo"></span></div>
     </div>`;
   const vista = $('.ed-vista', box), tela = $('.ed-tela', box), vivo = $('.ed-vivo', box), strato = $('.ed-strato', box);
   const ctx = tela.getContext('2d'), cvv = vivo.getContext('2d');
@@ -1917,6 +2070,9 @@ function creaEditor(box, pagina, opz) {
   function disegnaIndice() {
     const p = $('.ed-indice', box);
     vista.classList.toggle('con-indice', !!ed.indiceAperto && W > 560);
+    // v12.2: maniglia dell'indice; in finestra stretta l'indice è un pannello sopra la pagina, col velo (tocco fuori = chiude)
+    vista.classList.toggle('ind-aperto', !!ed.indiceAperto);
+    vista.classList.toggle('ind-sopra', !!ed.indiceAperto && apStretto());
     if (!ed.indiceAperto) { p.hidden = true; return; }
     p.hidden = false;
     const tt = titoletti().slice().sort((a, b) => a.y - b.y);
@@ -1930,7 +2086,7 @@ function creaEditor(box, pagina, opz) {
       <button type="button" class="ed-ind-piu">＋ titoletto qui (schermo ${schermoDi(ed.v.y + 70 / ed.v.z)})</button>
       <p class="piccolo">Tocca un titoletto per andarci.</p>`;
     tt.forEach(t => { if (!t.zona) return; const cv = p.querySelector('.ed-ind-voce[data-id="' + CSS.escape(t.id) + '"] canvas'); if (cv) miniTitoletto(cv, t); });
-    p.querySelector('[data-x]').onclick = () => { ed.indiceAperto = false; LS.set('apIndice', false); disegnaIndice(); aggiornaBottoneIndice(); };
+    p.querySelector('[data-x]').onclick = () => ed.impostaIndice(false);
     p.querySelector('.ed-ind-piu').onclick = () => nuovoTitoletto(null);
     $$('.ed-ind-voce', p).forEach(v => v.onclick = ev => {
       const m = ev.target.closest('[data-m]');
@@ -1940,9 +2096,14 @@ function creaEditor(box, pagina, opz) {
     });
   }
   function aggiornaBottoneIndice() { const b = $('.ed-b-indice', box); if (b) b.classList.toggle('attivo', !!ed.indiceAperto); if (ed.suIndice) ed.suIndice(!!ed.indiceAperto); }
-  ed.indiceAperto = !rapido && LS.get('apIndice', false);
+  // v12.2: la scelta dell'indice si ricorda solo nella finestra larga; in quella stretta (tablet in verticale, telefono)
+  // l'indice è un pannello che si apre e si chiude al momento, e girando il tablet torna la scelta della finestra larga.
+  ed.indiceAperto = !rapido && !apStretto() && LS.get('apIndice', false);
   /** v12.1: apre/chiude l'indice (dal gruppo ▤ ☰ ⛶ e dalla striscia del tutto schermo); la scelta si ricorda. */
-  ed.impostaIndice = si => { if (rapido) return; ed.indiceAperto = !!si; LS.set('apIndice', ed.indiceAperto); aggiornaBottoneIndice(); disegnaIndice(); };
+  ed.impostaIndice = si => { if (rapido) return; ed.indiceAperto = !!si; if (!apStretto()) LS.set('apIndice', ed.indiceAperto); apColonne(); aggiornaBottoneIndice(); disegnaIndice(); };
+  ed.cambioModo = () => { if (rapido) return; ed.indiceAperto = !apStretto() && LS.get('apIndice', false); apColonne(); aggiornaBottoneIndice(); disegnaIndice(); };
+  if (!rapido) apManiglia($('.ed-ind-man', box), 'i');
+  $('.ed-velo', box).addEventListener('pointerdown', ev => { ev.preventDefault(); ev.stopPropagation(); ed.impostaIndice(false); });
   function nodoTesto(e) {
     const d = document.createElement('div');
     d.className = 'ed-testo';
@@ -2566,7 +2727,7 @@ function creaEditor(box, pagina, opz) {
     const a = b.dataset.az;
     if (a === 'annulla') annulla();
     if (a === 'ripeti') ripeti();
-    if (a === 'indice') { ed.indiceAperto = !ed.indiceAperto; LS.set('apIndice', ed.indiceAperto); aggiornaBottoneIndice(); disegnaIndice(); }
+    if (a === 'indice') ed.impostaIndice(!ed.indiceAperto);
     if (a === 'titoletto') nuovoTitoletto(null);
     if (a === 'foto') $('#ed-file', box).click();
     if (a === 'tastiera') { scegliStrumento('testo'); const L = limiti(); nuovoTesto(24, Math.min(L.h - 30, ed.v.y + 40)); }

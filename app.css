@@ -340,7 +340,9 @@ svg.traccia { width: 100%; height: auto; display: block; }
 
 body.pagina-appunti main { max-width: none; padding: 0; }
 body.pagina-appunti .penna { display: none; }
-.ap-guscio { display: grid; grid-template-columns: 270px 300px minmax(0, 1fr); height: calc(100vh - 57px - 62px); height: calc(100dvh - 57px - 62px); min-height: 420px; }
+/* v12.2: larghezze di sezioni, elenco e indice scritte da appunti.js (apColonne: maniglie, ricordate per orientamento) */
+:root { --ap-ws: 270px; --ap-we: 300px; --ap-wi: 260px; }
+.ap-guscio { display: grid; grid-template-columns: var(--ap-ws) var(--ap-we) minmax(0, 1fr); height: calc(100vh - 57px - 62px); height: calc(100dvh - 57px - 62px); min-height: 420px; }
 .ap-col { min-width: 0; overflow: auto; border-right: 1px solid var(--bordo); }
 .ap-sez { padding: 12px 12px 20px; display: flex; flex-direction: column; gap: 6px; }
 .ap-testa-sez { display: flex; align-items: center; justify-content: space-between; }
@@ -464,12 +466,15 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ed-barretta.trascino span { background: rgba(138, 180, 248, .95); box-shadow: 0 0 0 3px rgba(138, 180, 248, .25); }
 .ed-barretta .ed-tacca { position: absolute; left: 2px; right: 2px; height: 3px; border-radius: 2px; background: #8ab4f8; pointer-events: none; }
 .ed-barretta:not(.ed-barra-lunga) .ed-tacca { display: none; }
-.ed-vista.con-indice .ed-barretta { right: 266px; }
-.ed-vista.con-indice .ed-info { right: 270px; }
+.ed-vista.con-indice .ed-barretta { right: calc(var(--ap-wi) + 6px); }
+.ed-vista.con-indice .ed-info { right: calc(var(--ap-wi) + 10px); }
 .ed-fumetto { position: absolute; right: 26px; z-index: 4; background: #2a3140; border: 1px solid var(--accento); color: var(--testo); border-radius: 8px; padding: 5px 10px; font-size: 13px; white-space: nowrap; pointer-events: none; box-shadow: 0 6px 16px rgba(0, 0, 0, .5); }
-.ed-vista.con-indice .ed-fumetto { right: 290px; }
+.ed-vista.con-indice .ed-fumetto { right: calc(var(--ap-wi) + 30px); }
 .ed-info.ed-carica { color: var(--giallo, #fdd663); }
-.ed-indice { position: absolute; right: 0; top: 0; bottom: 0; width: 260px; z-index: 3; background: var(--superficie); border-left: 1px solid var(--bordo); box-shadow: -10px 0 24px rgba(0, 0, 0, .35); padding: 10px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.ed-indice { position: absolute; right: 0; top: 0; bottom: 0; width: var(--ap-wi); max-width: 100%; z-index: 3; background: var(--superficie); border-left: 1px solid var(--bordo); box-shadow: -10px 0 24px rgba(0, 0, 0, .35); padding: 10px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+/* v12.2: "display: flex" qui sopra vinceva sull'attributo hidden, così la colonna restava sempre (e con l'Indice spento
+   copriva anche la barra di scorrimento, che sta sotto di lei). Indice spento = colonna tolta del tutto. */
+.ed-indice[hidden] { display: none; }
 .ed-ind-testa { display: flex; align-items: center; gap: 8px; }
 .ed-ind-testa small { color: var(--testo-2); }
 .ed-ind-testa button { margin-left: auto; min-height: 32px; min-width: 32px; padding: 0; border: 0; background: none; font-size: 16px; }
@@ -516,14 +521,19 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ap-rapido-piede .piccolo { flex: 1; font-size: 13px; }
 .ed-tastiera { margin-left: 8px; }
 
-/* tablet in verticale, PC stretto: colonne più strette; sotto i 900 px una colonna alla volta */
-@media (max-width: 1200px) { .ap-guscio { grid-template-columns: 230px 260px minmax(0, 1fr); } }
+/* v12.2 (SPEC §3): sotto i 900 px (tablet in verticale, telefono, PC stretto) c'è solo la pagina; ▤ Sezioni apre sezioni +
+   elenco come pannello da sinistra SOPRA la pagina, col velo scuro (tocco fuori = chiude). Senza appunto aperto il
+   pannello resta aperto (.ap-fisso, niente velo). Prima: una colonna alla volta col pulsante ‹ (tolto). */
 @media (max-width: 899px) {
-  .ap-guscio { grid-template-columns: 1fr; }
-  .ap-guscio > .ap-col { display: none; border-right: 0; }
-  .ap-guscio[data-pannello="sezioni"] > .ap-sez, .ap-guscio[data-pannello="appunto"] > .ap-pagina { display: flex; }
-  .ap-guscio[data-pannello="elenco"] > .ap-elenco { display: block; }
-  .ap-indietro { display: inline-flex; align-items: center; justify-content: center; }
+  .ap-guscio, .ap-guscio.ap-larga { grid-template-columns: minmax(0, 1fr); }
+  .ap-guscio > .ap-sez, .ap-guscio > .ap-elenco { display: none; }
+  .ap-guscio > .ap-pagina { display: flex; }
+  .ap-guscio.ap-pannello-su > .ap-sez, .ap-guscio.ap-pannello-su > .ap-elenco { display: block; visibility: visible; position: absolute; top: 0; bottom: 0;
+    z-index: 7; overflow: auto; background: var(--sfondo); border-right: 1px solid var(--bordo); }
+  .ap-guscio.ap-pannello-su > .ap-sez { display: flex; left: 0; width: var(--ap-ws); }
+  .ap-guscio.ap-pannello-su > .ap-elenco { left: var(--ap-ws); width: var(--ap-we); box-shadow: 14px 0 30px rgba(0, 0, 0, .55); }
+  body:not(.ap-tutto) .ap-guscio.ap-pannello-su > .ap-man { display: block; }
+  body:not(.ap-tutto) .ap-guscio.ap-pannello-su:not(.ap-fisso) > .ap-velo-pann { display: block; }
   .ap-voce .ap-menu-btn { visibility: visible; }
   .ed-barra button small { display: none; }
   .ed-barra button { min-width: 40px; min-height: 40px; }
@@ -533,7 +543,28 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 @media (max-width: 600px) { .ap-guscio { height: calc(100vh - 57px - 58px); height: calc(100dvh - 57px - 58px); } }
 .ap-guscio.ap-larga { grid-template-columns: 0 0 minmax(0, 1fr); }
 .ap-guscio.ap-larga > .ap-sez, .ap-guscio.ap-larga > .ap-elenco { visibility: hidden; border: 0; }
-@media (max-width: 899px) { .ap-solo-largo { display: none; } .ap-guscio.ap-larga { grid-template-columns: 1fr; } }
+/* v12.2 (SPEC §4): maniglie tra sezioni ed elenco, tra elenco e pagina (e sul bordo dell'indice, .ed-ind-man): linea
+   con un segno al centro; si trascinano col dito o col mouse (la penna no), doppio tocco = larghezza iniziale */
+.ap-velo-pann { display: none; position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, .5); }
+.ap-man { display: none; position: absolute; top: 0; bottom: 0; width: 18px; margin-left: -9px; z-index: 8; touch-action: none; cursor: col-resize; }
+.ap-man[data-m="s"] { left: var(--ap-ws); }
+.ap-man[data-m="e"] { left: calc(var(--ap-ws) + var(--ap-we)); }
+.ap-man::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: transparent; }
+.ap-man::after { content: ''; position: absolute; left: 6px; top: 50%; width: 6px; height: 34px; margin-top: -17px; border-radius: 3px; background: #4a5361; box-shadow: 0 0 0 1px var(--sfondo); }
+.ap-man.trascino::before { left: 7px; width: 4px; background: var(--accento); }
+.ap-man.trascino::after { left: 4px; width: 10px; height: 44px; margin-top: -22px; background: var(--accento); box-shadow: 0 0 0 4px rgba(138, 180, 248, .25); }
+.ap-man-fumo { display: none; position: absolute; left: 20px; top: 50%; margin-top: -50px; white-space: nowrap; background: #2a3140; border: 1px solid var(--accento);
+  border-radius: 8px; padding: 4px 10px; font-size: 13px; color: var(--testo); box-shadow: 0 6px 16px rgba(0, 0, 0, .5); pointer-events: none; }
+.ap-man-fumo small { display: block; color: var(--testo-2); font-size: 11px; }
+.ap-man.trascino .ap-man-fumo { display: block; }
+@media (min-width: 900px) { body:not(.ap-tutto) .ap-guscio:not(.ap-larga) > .ap-man { display: block; } }
+body.ap-tutto.ap-cassetto .ap-guscio > .ap-man { display: block; }
+.ed-ind-man { left: auto; right: var(--ap-wi); margin-left: 0; margin-right: -9px; z-index: 5; }
+.ed-ind-man .ap-man-fumo { left: auto; right: 20px; }
+.ed-vista.ind-aperto .ed-ind-man { display: block; }
+/* indice in finestra stretta: pannello sopra la pagina col velo (tocco fuori = chiude) */
+.ed-velo { display: none; position: absolute; inset: 0; z-index: 3; background: rgba(0, 0, 0, .45); }
+.ed-vista.ind-sopra .ed-velo { display: block; }
 .ap-solo-telefono { display: none; }
 @media (max-width: 600px) {
   .ap-solo-telefono { display: inline-block; }
@@ -594,7 +625,7 @@ body.ap-tutto .ap-striscia { display: flex; }
 .ap-guscio { position: relative; }
 body.ap-tutto.ap-cassetto .ap-guscio > .ap-sez, body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { display: block; visibility: visible; position: absolute;
   top: 0; bottom: 0; z-index: 7; overflow: auto; background: var(--sfondo); border-right: 1px solid var(--bordo); box-shadow: 12px 0 26px rgba(0, 0, 0, .5); }
-body.ap-tutto.ap-cassetto .ap-guscio > .ap-sez { left: 0; width: min(230px, 45vw); }
-body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: min(230px, 45vw); width: min(260px, 50vw); }
+body.ap-tutto.ap-cassetto .ap-guscio > .ap-sez { left: 0; width: var(--ap-ws); }   /* v12.2: le stesse larghezze delle maniglie */
+body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: var(--ap-we); }
 /* v12: a tutto schermo la striscia sta in alto a destra: l'indice parte più in basso */
 .ap-tutto .ed-indice { padding-top: 60px; }
