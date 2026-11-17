@@ -458,6 +458,36 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ed-info { position: absolute; right: 10px; bottom: 8px; font-size: 12px; color: var(--testo-2); background: rgba(17, 20, 24, .7); padding: 1px 8px; border-radius: 999px; pointer-events: none; }
 .ed-barretta { position: absolute; right: 2px; top: 4px; bottom: 30px; width: 4px; pointer-events: none; }
 .ed-barretta span { position: absolute; left: 0; width: 4px; border-radius: 2px; background: rgba(138, 180, 248, .35); }
+/* v12: su una pagina lunga la barra diventa larga, trascinabile, con le tacche dei titoletti */
+.ed-barretta.ed-barra-lunga { width: 16px; right: 3px; pointer-events: auto; border-radius: 8px; background: rgba(255, 255, 255, .05); touch-action: none; cursor: pointer; z-index: 2; }
+.ed-barretta.ed-barra-lunga span { width: 12px; left: 2px; min-height: 26px; border-radius: 6px; background: rgba(138, 180, 248, .55); }
+.ed-barretta.trascino span { background: rgba(138, 180, 248, .95); box-shadow: 0 0 0 3px rgba(138, 180, 248, .25); }
+.ed-barretta .ed-tacca { position: absolute; left: 2px; right: 2px; height: 3px; border-radius: 2px; background: #8ab4f8; pointer-events: none; }
+.ed-barretta:not(.ed-barra-lunga) .ed-tacca { display: none; }
+.ed-vista.con-indice .ed-barretta { right: 266px; }
+.ed-vista.con-indice .ed-info { right: 270px; }
+.ed-fumetto { position: absolute; right: 26px; z-index: 4; background: #2a3140; border: 1px solid var(--accento); color: var(--testo); border-radius: 8px; padding: 5px 10px; font-size: 13px; white-space: nowrap; pointer-events: none; box-shadow: 0 6px 16px rgba(0, 0, 0, .5); }
+.ed-vista.con-indice .ed-fumetto { right: 290px; }
+.ed-info.ed-carica { color: var(--giallo, #fdd663); }
+.ed-indice { position: absolute; right: 0; top: 0; bottom: 0; width: 260px; z-index: 3; background: var(--superficie); border-left: 1px solid var(--bordo); box-shadow: -10px 0 24px rgba(0, 0, 0, .35); padding: 10px; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.ed-ind-testa { display: flex; align-items: center; gap: 8px; }
+.ed-ind-testa small { color: var(--testo-2); }
+.ed-ind-testa button { margin-left: auto; min-height: 32px; min-width: 32px; padding: 0; border: 0; background: none; font-size: 16px; }
+.ed-ind-lista { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.ed-ind-voce { display: flex; align-items: center; gap: 6px; padding: 7px 6px 7px 9px; border-radius: 8px; cursor: pointer; min-height: 40px; }
+.ed-ind-voce:hover { background: var(--superficie-2); }
+.ed-ind-voce.attiva { background: var(--superficie-2); box-shadow: inset 3px 0 0 var(--accento); font-weight: 600; }
+.ed-ind-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; font-size: 14px; }
+.ed-ind-t canvas { position: static; inset: auto; width: 150px; height: 34px; border-radius: 4px; background: rgba(255, 255, 255, .03); }
+.ed-ind-t small { color: var(--testo-2); font-weight: 400; }
+.ed-ind-n { color: var(--testo-2); font-size: 12px; white-space: nowrap; }
+.ed-ind-voce button { min-height: 30px; min-width: 30px; padding: 0; border: 0; background: none; color: var(--testo-2); }
+.ed-ind-piu { border: 1px dashed var(--bordo); background: none; color: var(--accento); min-height: 40px; }
+.ed-indice .piccolo { margin: 0; }
+.ed-titoletti { position: absolute; left: 0; top: 0; }
+.ed-tit { position: absolute; left: 4px; height: 22px; display: flex; align-items: center; gap: 8px; pointer-events: none; }
+.ed-tit i { flex: 1; height: 0; border-top: 1.5px dashed rgba(138, 180, 248, .45); }
+.ed-tit-fl { pointer-events: auto; background: rgba(138, 180, 248, .9); color: #0f1a2c; font: 700 15px system-ui, "Segoe UI", Roboto, sans-serif; border-radius: 6px; padding: 1px 9px; white-space: nowrap; cursor: pointer; }
 
 /* finestre e menu */
 .ap-velo { position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 40; background: rgba(0, 0, 0, .5); display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -536,3 +566,5 @@ body.ap-tutto .ap-esci-tutto { display: flex !important; border-color: var(--acc
   touch-action: none; user-select: none; -webkit-user-select: none; }
 body.ap-tutto .ap-tutto-btn { display: flex; align-items: center; justify-content: center; }
 body.ap-tutto .ap-editor.barra-su ~ .ap-tutto-btn, .ap-tutto-btn:active { opacity: .9; }
+/* v12: a tutto schermo il pulsantino ✎ sta in alto a destra: l'indice parte più in basso */
+.ap-tutto .ed-indice { padding-top: 54px; }

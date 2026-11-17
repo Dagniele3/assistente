@@ -5,7 +5,8 @@
 // la pagina (app.js) salva l'appunto aperto e si ricarica una volta da sola, quando non si sta scrivendo.
 // Le pagine della versione vecchia (che non sanno ricaricarsi) si ricaricano da qui solo quando sono nascoste.
 // Le chiamate ad Apps Script (altro dominio) non passano di qui.
-const CACHE = 'assistente-v11.1';
+// v12: Appunti a pagina lunga divisa in fogli (titoletti, indice, barra trascinabile).
+const CACHE = 'assistente-v12';
 const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // pagine che hanno risposto "gestisco" (si ricaricano da sole, in modo sicuro)

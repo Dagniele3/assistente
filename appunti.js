@@ -29,7 +29,7 @@ const AP_LARGHEZZA = 1000;                // larghezza minima della pagina (punt
 
 // ───────────────────────── Memoria del dispositivo (IndexedDB) ─────────────────────────
 
-const apMem = { db: null, apertura: null, riserva: {}, mini: {} };
+const apMem = { db: null, apertura: null, riserva: {}, mini: {}, scritti: {} };
 
 function apDb() {
   if (apMem.db) return Promise.resolve(apMem.db);
@@ -41,11 +41,13 @@ function apDb() {
     const fine = db => { if (fatto) return; fatto = true; if (!db) apMem.apertura = null; ok(db); };
     setTimeout(() => fine(null), 4000);
     let req;
-    try { req = indexedDB.open('assistente-appunti', 1); } catch (e) { fine(null); return; }
+    try { req = indexedDB.open('assistente-appunti', 2); } catch (e) { fine(null); return; }
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('pagine')) db.createObjectStore('pagine', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('mini')) db.createObjectStore('mini', { keyPath: 'id' });
+      // v12: un record per foglio delle pagine a fogli ({ k: "<id>|0007", id, i, s: JSON del foglio })
+      if (!db.objectStoreNames.contains('fogli')) db.createObjectStore('fogli', { keyPath: 'k' });
     };
     req.onsuccess = () => { apMem.db = req.result; apMem.db.onversionchange = () => { apMem.db.close(); apMem.db = null; apMem.apertura = null; }; fine(apMem.db); };
     req.onerror = () => fine(null);
@@ -66,14 +68,67 @@ function apStore(nome, modo, fn) {
   }));
 }
 
-/** Record della pagina: { id, pagina, base (versione del server da cui parte), sporca } */
-function apLeggi(id) {
-  return apStore('pagine', 'readonly', st => st ? st.get(id) : null).then(r => r || apMem.riserva[id] || null);
+/**
+ * Record della pagina: { id, pagina, base (versione del server da cui parte), sporca, da, png, intera }.
+ * v12: per una pagina a fogli il record in "pagine" ha pagina.fogli = null e pagina.n = quanti fogli; il testo di ogni
+ * foglio sta nell'archivio "fogli". Salvando si riscrivono solo i fogli cambiati (stessa stringa = niente da fare) e
+ * l'elenco delle pagine (apTutti) non carica il contenuto. "soloPrimo" = solo il primo foglio (miniature).
+ */
+const apChiaveFoglio = (id, i) => id + '|' + String(i).padStart(4, '0');
+function apLeggi(id, soloPrimo) {
+  const riserva = () => apMem.riserva[id] || null;
+  return apDb().then(db => new Promise(ok => {
+    if (!db) { ok(riserva()); return; }
+    try {
+      const tx = db.transaction(['pagine', 'fogli'], 'readonly');
+      const rq = tx.objectStore('pagine').get(id);
+      let fogli = null;
+      rq.onsuccess = () => {
+        const r = rq.result;
+        if (r && r.pagina && r.pagina.fogli === null) {
+          const rng = soloPrimo ? IDBKeyRange.only(apChiaveFoglio(id, 0)) : IDBKeyRange.bound(id + '|', id + '|￿');
+          const fq = tx.objectStore('fogli').getAll(rng);
+          fq.onsuccess = () => { fogli = fq.result; };
+        }
+      };
+      tx.oncomplete = () => {
+        const r = rq.result;
+        if (!r) { ok(riserva()); return; }
+        if (r.pagina && r.pagina.fogli === null) {
+          const arr = new Array(Math.max(1, r.pagina.n || 1)).fill('{"el":[],"foto":{}}');
+          (fogli || []).forEach(f => { if (f.i < arr.length) arr[f.i] = f.s; });
+          if (soloPrimo) arr.length = 1; else apMem.scritti[id] = arr.slice();
+          r.pagina.fogli = arr;
+          delete r.pagina.n;
+        }
+        ok(r);
+      };
+      tx.onerror = () => ok(riserva());
+    } catch (e) { ok(riserva()); }
+  }));
 }
 function apScrivi(rec) {
   apMem.riserva[rec.id] = rec;   // anche in memoria: se IndexedDB non c'è, almeno fino alla chiusura
-  return apStore('pagine', 'readwrite', st => st ? st.put(rec) : null);
+  const p = rec.pagina;
+  const aFogli = p && p.v === 2 && Array.isArray(p.fogli);
+  const meta = aFogli ? Object.assign({}, rec, { pagina: Object.assign({}, p, { fogli: null, n: p.fogli.length }) }) : rec;
+  return apDb().then(db => new Promise(ok => {
+    if (!db) { ok(null); return; }
+    try {
+      const tx = db.transaction(['pagine', 'fogli'], 'readwrite');
+      tx.objectStore('pagine').put(meta);
+      if (aFogli) {
+        const st = tx.objectStore('fogli');
+        const prima = apMem.scritti[rec.id];
+        p.fogli.forEach((s, i) => { if (!prima || prima[i] !== s) st.put({ k: apChiaveFoglio(rec.id, i), id: rec.id, i, s }); });
+        st.delete(IDBKeyRange.bound(apChiaveFoglio(rec.id, p.fogli.length), rec.id + '|￿'));   // la pagina si è accorciata
+      }
+      tx.oncomplete = () => { if (aFogli) apMem.scritti[rec.id] = p.fogli.slice(); ok(true); };
+      tx.onerror = () => ok(null);
+    } catch (e) { ok(null); }
+  }));
 }
+/** Tutti i record (v12: delle pagine a fogli solo le informazioni, senza il contenuto: per quello apLeggi). */
 function apTutti() {
   return apStore('pagine', 'readonly', st => st ? st.getAll() : null).then(r => {
     const m = {};
@@ -86,7 +141,8 @@ function apMiniLeggi(id) { return apStore('mini', 'readonly', st => st ? st.get(
 function apMiniScrivi(rec) { return apStore('mini', 'readwrite', st => st ? st.put(rec) : null); }
 
 let apSporche = 0;   // pagine non ancora inviate (per "N in coda")
-function apContaSporche() { return apTutti().then(t => { apSporche = t.filter(x => x.sporca).length; return apSporche; }); }
+// v12: conta solo le pagine con modifiche non ancora sul server (le immagini dei fogli che aspettano non sono "in coda")
+function apContaSporche() { return apTutti().then(t => { apSporche = t.filter(x => x.sporca && !(x.pagina && x.base && x.pagina.modificato === x.base)).length; return apSporche; }); }
 
 // ───────────────────────── Righe (schede Appunti e Sezioni appunti) ─────────────────────────
 
@@ -813,15 +869,32 @@ function apStatoSalvato() {
   el.classList.toggle('da-inviare', !!(rec && rec.sporca));
 }
 
-/** Ogni modifica della pagina: memoria del dispositivo subito, riga (testo per la ricerca, caselle) e invio poco dopo. */
-function apPaginaCambiata(id, pagina) {
+/**
+ * Ogni modifica della pagina: memoria del dispositivo subito, riga (testo per la ricerca, caselle) e invio poco dopo.
+ * v12: "x" è l'editor (esporta solo i fogli cambiati) oppure una pagina intera. Nel record restano i fogli da inviare
+ * (rec.da) e quelli di cui rifare l'immagine (rec.png), ognuno con l'ora della modifica: un invio toglie solo quelli
+ * che non sono cambiati di nuovo nel frattempo.
+ */
+function apPaginaCambiata(id, x) {
   const ed = AP.ed && AP.ed.id === id ? AP.ed : null;
   const rec = ed ? ed.rec : { id, base: '' };
-  pagina.modificato = new Date().toISOString();
-  rec.pagina = pagina;
+  const ora = new Date().toISOString();
+  let info;
+  if (x && x.esporta) {
+    const r = x.esporta();
+    r.salvata.modificato = ora;
+    rec.pagina = r.salvata;
+    rec.da = rec.da || {}; rec.png = rec.png || {};
+    r.cambiati.forEach(k => { rec.da[k] = ora; });
+    r.png.forEach(k => { rec.png[k] = ora; });
+    info = apInfoDa(x.pagina.el, x.pagina.titoletti);
+  } else {
+    rec.pagina = apSalvata(Object.assign({}, x, { modificato: ora }));
+    rec.intera = true;
+    info = apInfoDa(apEspansa(rec.pagina).el, rec.pagina.titoletti);
+  }
   rec.sporca = true;
   apScrivi(rec);
-  const info = apInfoPagina(pagina);
   const r = apRiga(id) || {};
   if (r.Testo !== info.testo || n(r['Da spuntare']) !== info.daSpuntare) apSalvaRiga(id, { 'Testo': info.testo, 'Da spuntare': info.daSpuntare });
   else pianificaSync(6000);
@@ -902,35 +975,87 @@ function apTestoInHtml(t) {
 
 // ───────────────────────── Sincronizzazione delle pagine (chiamata da sincronizza() di app.js) ─────────────────────────
 
-/** Invia le pagine cambiate su questo dispositivo (una alla volta: c'è l'immagine). */
+const AP_PNG_PER_INVIO = 4;
+/** Si sta scrivendo in quell'appunto (penna o tastiera negli ultimi 15 s)? Le immagini dei fogli aspettano. */
+function apScrivendo(id) { return !!(AP.ed && (!id || AP.ed.id === id) && AP.ed.ultimoTocco && Date.now() - AP.ed.ultimoTocco < 15000); }   // immagini dei fogli per invio (le altre partono agli invii dopo: il tablet resta fluido)
+
+/**
+ * Invia le pagine cambiate su questo dispositivo, una alla volta. v12: solo i fogli cambiati (rec.da) e al massimo
+ * AP_PNG_PER_INVIO immagini (rec.png); tutta la pagina se è nuova, se viene da una versione vecchia o se lo chiede
+ * lo script (conflitto: per fare la copia gli serve la pagina intera).
+ */
 async function appuntiInvia() {
   const tutte = await apTutti();
   const sporche = tutte.filter(x => x.sporca);
-  apSporche = sporche.length;
-  for (const rec of sporche) {
-    const r = apRiga(rec.id);
-    if (r && r['Eliminato il'] && !rec.base) { rec.sporca = false; await apScrivi(rec); continue; }   // nuovo e già nel cestino
-    const pagina = rec.pagina;
-    const inviata = pagina.modificato;
-    let immagine = '';
-    try { immagine = await rendiPaginaPng(pagina); } catch (e) { immagine = ''; }
-    const valori = r ? { 'Titolo': r.Titolo, 'Sezione': apSezDi(r), 'Sottosezione': r.Sottosezione || '', 'Creato il': r['Creato il'] } : null;
-    const j = await api('appuntoSalva', { id: rec.id, base: rec.base || '', pagina: JSON.stringify(pagina), immagine, valori });
-    const ora = (await apLeggi(rec.id)) || rec;
+  apSporche = sporche.filter(x => !(x.pagina && x.base && x.pagina.modificato === x.base)).length;
+  let altre = false;
+  for (const x of sporche) {
+    const rec0 = (await apLeggi(x.id)) || x;
+    const r = apRiga(rec0.id);
+    if (r && r['Eliminato il'] && !rec0.base) { rec0.sporca = false; await apScrivi(rec0); continue; }   // nuovo e già nel cestino
+    let j = await apInviaUna(rec0, r, false);
+    if (j.esito === 'serveIntera') j = await apInviaUna(rec0, r, true);
+    const ora = (await apLeggi(rec0.id)) || rec0;
     if (j.esito === 'conflitto' && !j.vinto) {
       // ha vinto la versione del server: questa è diventata la copia in conflitto; la pagina si riscarica
-      ora.sporca = false; ora.base = ''; ora.scarica = true;
+      ora.sporca = false; ora.base = ''; ora.scarica = true; ora.da = {}; ora.png = {}; ora.intera = false;
       toast('Appunto cambiato anche su un altro dispositivo: questa versione è in Da sistemare come «copia in conflitto»');
     } else {
       ora.base = j.versione;
-      if (ora.pagina && ora.pagina.modificato === inviata) ora.sporca = false;   // cambiata intanto: resta da inviare
+      ora.intera = false;
+      // tolti solo i fogli e le immagini non cambiati di nuovo durante l'invio
+      ora.da = ora.da || {}; ora.png = ora.png || {};
+      j._fogli.forEach(k => { if (ora.da[k] && ora.da[k] <= j._ora) delete ora.da[k]; });
+      j._png.forEach(k => { if (ora.png[k] && ora.png[k] <= j._ora) delete ora.png[k]; });
+      if (j._tutti) Object.keys(ora.da).forEach(k => { if (ora.da[k] <= j._ora) delete ora.da[k]; });
+      const n = (ora.pagina.fogli || []).length;
+      Object.keys(ora.png).forEach(k => { if (Number(k) >= n) delete ora.png[k]; });
+      Object.keys(ora.da).forEach(k => { if (Number(k) >= n) delete ora.da[k]; });
+      ora.sporca = ora.pagina.modificato !== j._ora || Object.keys(ora.da).length > 0 || Object.keys(ora.png).length > 0;
+      if (Object.keys(ora.png).length && !Object.keys(ora.da).length) altre = true;
       if (j.copia) toast('Conflitto: l\'altra versione è in Da sistemare come «' + j.copia.titolo + '»');
     }
     await apScrivi(ora);
-    if (AP.ed && AP.ed.id === rec.id) { AP.ed.rec = ora; }
-    if (r) { r['Versione pagina'] = j.versione; }
+    if (AP.ed && AP.ed.id === rec0.id) { AP.ed.rec = ora; }
+    if (r && j.versione) { r['Versione pagina'] = j.versione; }
   }
   await apContaSporche();
+  if (altre) pianificaSync(apScrivendo() ? 16000 : 4000);   // restano immagini di fogli da mandare
+}
+
+/** Un invio di un appunto. Ritorna la risposta dello script con _ora (versione inviata), _fogli e _png inviati. */
+async function apInviaUna(rec, r, forzaIntera) {
+  const s = apSalvata(rec.pagina);
+  if (s !== rec.pagina) rec.pagina = s;
+  const n = s.fogli.length;
+  if (!(Number((dati && dati.versione) || 0) >= 12)) {
+    // Script v11 (non ancora aggiornato): vuole la pagina intera in un solo pezzo e una sola immagine (qui il primo foglio).
+    const p = apEspansa(s);
+    const v1 = { v: 1, id: rec.id, modificato: s.modificato, sfondo: s.sfondo, titoletti: s.titoletti || [], el: p.el, foto: p.foto };
+    let immagine = '';
+    try { immagine = await rendiFoglioPng(s, 0); } catch (e) { immagine = ''; }
+    const valori1 = r ? { 'Titolo': r.Titolo, 'Sezione': apSezDi(r), 'Sottosezione': r.Sottosezione || '', 'Creato il': r['Creato il'] } : null;
+    const j1 = await api('appuntoSalva', { id: rec.id, base: rec.base || '', pagina: JSON.stringify(v1), immagine, valori: valori1 });
+    j1._ora = s.modificato; j1._fogli = s.fogli.map((x, k) => k); j1._png = []; j1._tutti = true;
+    if (rec.png) j1._png = Object.keys(rec.png).map(Number);
+    return j1;
+  }
+  const intera = forzaIntera || !rec.base || rec.intera || !rec.da;
+  const fogliK = intera ? s.fogli.map((x, k) => k) : Object.keys(rec.da).map(Number).filter(k => k < n);
+  const pngK = apScrivendo(rec.id) ? [] : (intera && !rec.png ? s.fogli.map((x, k) => k) : Object.keys(rec.png || {}).map(Number).filter(k => k < n))
+    .sort((a, b) => a - b).slice(0, AP_PNG_PER_INVIO);
+  const fogli = {};
+  fogliK.forEach(k => { fogli[k] = s.fogli[k]; });
+  const immagini = {};
+  for (const k of pngK) {
+    try { immagini[k] = await rendiFoglioPng(s, k); } catch (e) { /* senza immagine: si rifà al prossimo invio */ }
+    await new Promise(ok => setTimeout(ok, 0));   // il tablet respira tra un'immagine e l'altra
+  }
+  const meta = JSON.stringify({ v: 2, id: rec.id, modificato: s.modificato, sfondo: s.sfondo, titoletti: s.titoletti || [], alt: s.alt || AP_FOGLIO });
+  const valori = r ? { 'Titolo': r.Titolo, 'Sezione': apSezDi(r), 'Sottosezione': r.Sottosezione || '', 'Creato il': r['Creato il'] } : null;
+  const j = await api('appuntoSalva', { id: rec.id, base: rec.base || '', v: 2, pagina: meta, fogli, n, intera, immagini, valori });
+  j._ora = s.modificato; j._fogli = fogliK; j._png = Object.keys(immagini).map(Number); j._tutti = intera;
+  return j;
 }
 
 /** Scarica le pagine cambiate altrove (colonna "Versione pagina" diversa da quella del dispositivo). */
@@ -956,7 +1081,8 @@ async function apScaricaPagine(ids) {
     try { p = JSON.parse(j.pagine[id]); } catch (e) { continue; }
     const vecchio = await apLeggi(id);
     if (vecchio && vecchio.sporca) continue;
-    const rec = { id, pagina: p, base: p.modificato, sporca: false };
+    const rec = { id, pagina: apSalvata(p), base: p.modificato, sporca: false, da: {}, png: {} };
+    p = rec.pagina;
     await apScrivi(rec);
     apMem.mini[id] = null;
     if (AP.ed && AP.ed.id === id && !AP.ed.inUso()) { AP.ed.rec = rec; AP.ed.carica(p); }
@@ -970,7 +1096,7 @@ function apMiniatura(id, box) {
   const r = apRiga(id) || {};
   const ver = r['Versione pagina'] || r['Modificato il'] || '';
   if (apMem.mini[id] && apMem.mini[id].ver === ver) { box.style.backgroundImage = 'url(' + apMem.mini[id].url + ')'; return; }
-  apLeggi(id).then(rec => {
+  apLeggi(id, true).then(rec => {
     if (!rec) return;
     const v = rec.pagina.modificato;
     apMiniLeggi(id).then(m => {
@@ -1010,7 +1136,15 @@ function apRiquadro(e) {
   }
   return e._bb;
 }
-function apTogliRiquadro(e) { if (e && e._bb) e._bb = null; }
+function apTogliRiquadro(e) { if (e && e._bb) e._bb = null; if (e && e._j) e._j = null; }
+/** JSON di un elemento; tratti e foto lo tengono pronto (si azzera quando cambiano: apTogliRiquadro, arrotonda). */
+function apJsonEl(e) {
+  if (e.t === 'testo') return JSON.stringify(e);
+  if (e._j) return e._j;
+  const j = JSON.stringify(e);
+  Object.defineProperty(e, '_j', { value: j, writable: true, enumerable: false, configurable: true });
+  return j;
+}
 
 function apSfondo(c, sfondo, x0, y0, x1, y1) {
   const s = AP_SFONDI[(sfondo && sfondo.colore) || 'scuro'] || AP_SFONDI.scuro;
@@ -1174,25 +1308,120 @@ function apDisegnaTesto(c, e, pagina, soloMisura) {
   return y - e.y + pad0;
 }
 
-/** Immagine PNG della pagina per Claude in chat (leggibile: scala fino a 1,5, al massimo 2400 × 14000 px). */
-function rendiPaginaPng(pagina) {
-  const foto = pagina.foto || {};
-  return Promise.all(Object.keys(foto).map(k => apImmagine(foto[k]).pronta)).then(() => {
+// ───────────────────────── v12: pagina divisa in fogli (SPEC v12 §1) ─────────────────────────
+// La pagina resta UNA (si scorre senza salti), ma nei dati è divisa in fogli alti AP_FOGLIO punti: ogni elemento sta nel
+// foglio dove comincia (il suo punto più alto), con le coordinate della pagina intera. Così salvare, inviare e fare
+// l'immagine per Claude costa quanto i fogli cambiati, non quanto tutta la pagina.
+// "Forma salvata" (dispositivo e invio): { v: 2, id, modificato, sfondo, titoletti, alt, fogli: ['<JSON foglio>', …] }
+// con ogni foglio = { el: [...], foto: { chiave: dataURL } } (solo le foto usate lì). Nel file su Drive i fogli sono oggetti.
+// Titoletto = { id, y, testo, zona: [x0, y0, x1, y1] se è una scrittura a mano segnata col lazo }.
+
+const AP_FOGLIO = 1400;
+
+function apInizioEl(e) { return e.t === 'tratto' ? apRiquadro(e).y0 : e.y; }
+function apFoglioDi(e) { return Math.max(0, Math.floor(apInizioEl(e) / AP_FOGLIO)); }
+function apFineEl(e) { return e.t === 'testo' ? e.y + (e._h || 60) : apRiquadro(e).y1; }
+
+/** Elementi divisi per foglio (rispettando l'ordine), con le foto usate in ciascuno. */
+function apGruppi(el, foto) {
+  const g = [];
+  el.forEach(e => { const k = apFoglioDi(e); (g[k] = g[k] || []).push(e); });
+  const out = [];
+  for (let k = 0; k < Math.max(1, g.length); k++) {
+    const els = g[k] || [], f = {};
+    els.forEach(e => { if (e.t === 'foto' && foto && foto[e.f]) f[e.f] = foto[e.f]; });
+    out.push({ el: els, foto: f });
+  }
+  return out;
+}
+
+/** Qualsiasi pagina (v1 col solo "el", v2 coi fogli come oggetti o come testo) → forma salvata v2. */
+function apSalvata(p) {
+  if (!p) return null;
+  const meta = { v: 2, id: p.id, modificato: p.modificato, sfondo: p.sfondo || { colore: 'scuro', motivo: 'quadretti' }, titoletti: p.titoletti || [], alt: AP_FOGLIO };
+  if (p.v === 2 && Array.isArray(p.fogli)) {
+    meta.alt = p.alt || AP_FOGLIO;
+    meta.fogli = p.fogli.map(f => typeof f === 'string' ? f : JSON.stringify(f || { el: [], foto: {} }));
+    if (!meta.fogli.length) meta.fogli = ['{"el":[],"foto":{}}'];
+    return meta;
+  }
+  meta.fogli = apGruppi(p.el || [], p.foto || {}).map(f => JSON.stringify(f));
+  return meta;
+}
+
+/** Forma salvata → pagina da disegnare { el, foto, sfondo, titoletti }; "quali" = solo quei fogli (per le immagini). */
+function apEspansa(s, quali) {
+  const p = { v: 2, id: s.id, modificato: s.modificato, sfondo: s.sfondo, titoletti: s.titoletti || [], el: [], foto: {} };
+  (s.fogli || []).forEach((txt, k) => {
+    if (quali && quali.indexOf(k) < 0) return;
+    let f;
+    try { f = JSON.parse(txt); } catch (e) { return; }
+    (f.el || []).forEach(x => p.el.push(x));
+    Object.assign(p.foto, f.foto || {});
+  });
+  return p;
+}
+
+/** Testo scritto a tastiera (per la ricerca: caselle di testo e titoletti) e caselle ancora da spuntare. */
+function apInfoDa(el, titoletti) {
+  const info = apInfoPagina({ el: el.filter(e => e.t === 'testo') });
+  const tit = (titoletti || []).filter(t => t.testo).sort((a, b) => a.y - b.y).map(t => '§ ' + t.testo).join('\n');
+  if (tit) info.testo = (tit + '\n' + info.testo).trim().slice(0, 20000);
+  return info;
+}
+
+/** Fascetta del titoletto (pagina sullo schermo e immagine per Claude). */
+function apDisegnaTitoletto(c, t, larghezza) {
+  c.save();
+  c.fillStyle = 'rgba(138,180,248,.9)';
+  const y = t.y;
+  c.font = '700 15px system-ui, "Segoe UI", Roboto, sans-serif';
+  const testo = '🏷 ' + (t.testo || 'titoletto');
+  const w = c.measureText(testo).width + 18;
+  c.beginPath();
+  if (c.roundRect) c.roundRect(4, y - 24, w, 22, 6); else c.rect(4, y - 24, w, 22);
+  c.fill();
+  c.fillStyle = '#0f1a2c'; c.fillText(testo, 13, y - 8);
+  c.strokeStyle = 'rgba(138,180,248,.45)'; c.lineWidth = 1.5; c.setLineDash([6, 5]);
+  c.beginPath(); c.moveTo(w + 10, y - 13); c.lineTo(larghezza - 10, y - 13); c.stroke();
+  c.restore();
+}
+
+/**
+ * Immagine PNG di un foglio per Claude in chat (<ID>-NN.png): larga quanto la pagina (almeno 1000 punti), alta un foglio,
+ * scala fino a 1,5 (al massimo 2400 px di larghezza). Disegna anche la parte dei tratti del foglio sopra che scende qui.
+ */
+function rendiFoglioPng(s, k) {
+  const p = apEspansa(s, [k - 1, k]);
+  const foto = p.foto;
+  return Promise.all(Object.keys(foto).map(x => apImmagine(foto[x]).pronta)).then(() => {
     const prova = document.createElement('canvas').getContext('2d');
-    (pagina.el || []).forEach(e => { if (e.t === 'testo') e._h = apAltezzaTesto(prova, e); });
-    const L = apLimiti(pagina);
-    const scala = Math.min(1.5, 2400 / L.w, 14000 / L.h);
+    p.el.forEach(e => { if (e.t === 'testo') e._h = apAltezzaTesto(prova, e); });
+    const y0 = k * AP_FOGLIO, y1 = y0 + AP_FOGLIO;
+    let w = AP_LARGHEZZA;
+    p.el.forEach(e => { const x1 = e.t === 'testo' ? e.x + e.w : apRiquadro(e).x1; if (x1 + 40 > w) w = Math.ceil(x1 + 40); });
+    const scala = Math.min(1.5, 2400 / w);
     const cv = document.createElement('canvas');
-    cv.width = Math.round(L.w * scala); cv.height = Math.round(L.h * scala);
+    cv.width = Math.round(w * scala); cv.height = Math.round(AP_FOGLIO * scala);
     const c = cv.getContext('2d');
     c.scale(scala, scala);
-    apSfondo(c, pagina.sfondo, 0, 0, L.w, L.h);
-    apDisegnaElementi(c, pagina, { x0: 0, y0: 0, x1: L.w, y1: L.h }, true);
-    return cv.toDataURL('image/png');
+    c.translate(0, -y0);
+    apSfondo(c, p.sfondo, 0, y0, w, y1);
+    apDisegnaElementi(c, p, { x0: 0, y0, x1: w, y1 }, true);
+    (p.titoletti || []).forEach(t => { if (t.y >= y0 && t.y < y1 + 24) apDisegnaTitoletto(c, t, w); });
+    if (!cv.toBlob) return cv.toDataURL('image/png');
+    return new Promise(ok => cv.toBlob(b => {
+      if (!b) { ok(cv.toDataURL('image/png')); return; }
+      const fr = new FileReader();
+      fr.onload = () => ok(fr.result);
+      fr.onerror = () => ok(cv.toDataURL('image/png'));
+      fr.readAsDataURL(b);
+    }, 'image/png'));
   });
 }
 
 function rendiMiniatura(pagina) {
+  if (pagina && pagina.v === 2 && pagina.fogli) pagina = apEspansa(apSalvata(pagina), [0]);
   const foto = pagina.foto || {};
   return Promise.all(Object.keys(foto).map(k => apImmagine(foto[k]).pronta)).then(() => {
     const W = 1000, H = 760, s = 120 / W;
@@ -1233,7 +1462,9 @@ function creaEditor(box, pagina, opz) {
         <button type="button" data-az="ripeti" title="Ripeti (Ctrl+Y)"><span>↷</span><small>ripeti</small></button>
         ${rapido ? '' : `<button type="button" data-str="spazio" title="Inserisci spazio: trascina in giù"><span>⇕</span><small>spazio</small></button>
         <button type="button" data-az="foto" title="Foto"><span>🖼</span><small>foto</small></button>
-        <button type="button" data-az="sfondo" title="Sfondo della pagina"><span>▦</span><small>sfondo</small></button>`}
+        <button type="button" data-az="sfondo" title="Sfondo della pagina"><span>▦</span><small>sfondo</small></button>
+        <button type="button" data-az="indice" class="ed-b-indice" title="Indice dei titoletti"><span>☰</span><small>indice</small></button>
+        <button type="button" data-az="titoletto" title="Segna un titoletto qui (o seleziona col lazo una scritta e premi 🏷)"><span>🏷</span><small>titoletto</small></button>`}
         ${rapido ? '<button type="button" data-az="tastiera" class="ed-tastiera"><span>⌨</span><small>tastiera</small></button>' : ''}
       </div>
       ${rapido ? '' : '<div class="ed-gruppo ed-ultimi" title="Ultimi strumenti usati"></div>'}
@@ -1256,7 +1487,9 @@ function creaEditor(box, pagina, opz) {
       <canvas class="ed-vivo"></canvas>
       <div class="ed-strato"></div>
       <div class="ed-info"></div>
-      <div class="ed-barretta"><span></span></div>
+      <div class="ed-barretta" title="Trascina per andare in un altro punto della pagina"><span></span></div>
+      <div class="ed-fumetto" hidden></div>
+      <div class="ed-indice" hidden></div>
     </div>`;
   const vista = $('.ed-vista', box), tela = $('.ed-tela', box), vivo = $('.ed-vivo', box), strato = $('.ed-strato', box);
   const ctx = tela.getContext('2d'), cvv = vivo.getContext('2d');
@@ -1266,48 +1499,196 @@ function creaEditor(box, pagina, opz) {
   vista.classList.toggle('ed-sola', !!opz.soloLettura);
 
   // ── modello ──
+  // v12: la pagina in memoria è { el, foto, sfondo, titoletti } (tutti gli elementi in un elenco); i fogli servono a
+  // caricare a pezzi, a disegnare solo quelli visibili (indice) e a salvare solo quelli cambiati (cache per foglio).
+  // Una pagina v1 (appunto rapido, pagina vecchia) si usa così com'è.
+  let carTimer = null;
   function carica(p) {
-    ed.pagina = p;
-    if (!p.el) p.el = [];
-    if (!p.foto) p.foto = {};
-    if (!p.sfondo) p.sfondo = { colore: 'scuro', motivo: 'quadretti' };
+    clearTimeout(carTimer);
+    ed.cache = [];
+    ed.caricando = 0;
+    if (p && p.v === 2 && Array.isArray(p.fogli)) {
+      const s = apSalvata(p);
+      ed.pagina = { v: 2, id: s.id, modificato: s.modificato, sfondo: s.sfondo, titoletti: (s.titoletti || []).map(t => Object.assign({}, t)), el: [], foto: {} };
+      // ogni foglio resta testo finché non è letto: salvando, i fogli non ancora letti si rimandano uguali
+      ed.cache = s.fogli.map(str => ({ letto: false, str }));
+      ed.caricando = s.fogli.length;
+      leggiFoglio(0);
+      const prossimo = () => {
+        const k = ed.cache.findIndex(c => !c.letto);
+        if (k < 0) { ed.caricando = 0; info.classList.remove('ed-carica'); montaTesti(); ridisegna(); return; }
+        leggiFoglio(k);
+        carTimer = setTimeout(prossimo, 0);
+      };
+      carTimer = setTimeout(prossimo, 0);
+    } else {
+      ed.pagina = p;
+      if (!p.el) p.el = [];
+      if (!p.foto) p.foto = {};
+      if (!p.titoletti) p.titoletti = [];
+    }
+    if (!ed.pagina.sfondo) ed.pagina.sfondo = { colore: 'scuro', motivo: 'quadretti' };
+    ed.ultimoSfondo = JSON.stringify(ed.pagina.sfondo);
+    ed.ultimiTit = JSON.stringify(ed.pagina.titoletti);
     ed.storia = []; ed.futuro = []; ed.sel = [];
-    Object.keys(p.foto).forEach(k => apImmagine(p.foto[k]).pronta.then(ridisegna));
+    ed.muta = true;
     montaTesti();
     colori();
+    ridisegna();
+    if (ed.indiceAperto) disegnaIndice();
+  }
+  function leggiFoglio(k) {
+    const c = ed.cache[k];
+    if (!c || c.letto) return;
+    let f;
+    try { f = JSON.parse(c.str); } catch (e) { f = { el: [], foto: {} }; }
+    const els = f.el || [];
+    els.forEach(x => ed.pagina.el.push(x));
+    Object.keys(f.foto || {}).forEach(x => { ed.pagina.foto[x] = f.foto[x]; apImmagine(f.foto[x]).pronta.then(ridisegna); });
+    ed.cache[k] = { letto: true, str: c.str, refs: els.slice(), fp: improntaTesti(els), y1: maxFine(els) };
+    ed.caricando = Math.max(0, ed.caricando - 1);
+    info.classList.toggle('ed-carica', ed.caricando > 0);
+    ed.muta = true;
+    if (els.some(x => x.t === 'testo')) montaTesti();
     ridisegna();
   }
   ed.carica = carica;
   ed.inUso = () => inUso || !!strato.querySelector('.ed-testo:focus');
 
-  function istantanea() { return JSON.stringify(ed.pagina.el); }
-  function prima() { ed.storia.push(istantanea()); if (ed.storia.length > 60) ed.storia.shift(); ed.futuro = []; }
+  function improntaTesti(els) {
+    let s = '';
+    els.forEach(e => { if (e.t === 'testo') s += e.id + '|' + e.x + '|' + e.y + '|' + e.w + '|' + e.fs + '|' + e.c + '|' + (e._h || 0) + '|' + e.html + '\n'; });
+    return s;
+  }
+  function maxFine(els) { let m = 0; els.forEach(e => { const y = apFineEl(e); if (y > m) m = y; }); return m; }
+
+  /**
+   * Fogli da salvare: quelli il cui elenco di elementi è cambiato (elementi nuovi, tolti o rimpiazzati: chi viene
+   * modificato viene prima copiato, vedi prima()) o con caselle di testo cambiate. Gli altri si rimandano uguali.
+   * Ritorna { salvata (forma salvata), cambiati: [k], png: [k] (immagini da rifare: il foglio e quello sotto se un tratto ci scende) }.
+   */
+  ed.esporta = () => {
+    leggiTesti();
+    const ix = indice();
+    const nLetti = ix.gruppi.length;
+    let n = Math.max(1, nLetti);
+    ed.cache.forEach((c, k) => { if (!c.letto && k + 1 > n) n = k + 1; });
+    // fogli vuoti in fondo: la pagina finisce dove finisce il contenuto
+    while (n > 1 && !(ix.gruppi[n - 1] || []).length && !(ed.cache[n - 1] && !ed.cache[n - 1].letto)) n--;
+    const fogli = [], cambiati = [], png = {};
+    const tuttePng = JSON.stringify(ed.pagina.sfondo) !== ed.ultimoSfondo;
+    for (let k = 0; k < n; k++) {
+      const c = ed.cache[k];
+      if (c && !c.letto) { fogli.push(c.str); if (tuttePng) png[k] = 1; continue; }
+      const els = (ix.gruppi[k] || []).map(i => ed.pagina.el[i]);
+      const fp = improntaTesti(els);
+      const uguali = c && c.refs.length === els.length && c.fp === fp && els.every((e, i) => e === c.refs[i]);
+      if (uguali) { fogli.push(c.str); if (tuttePng) png[k] = 1; continue; }
+      const foto = {};
+      els.forEach(e => { if (e.t === 'foto' && ed.pagina.foto[e.f]) foto[e.f] = ed.pagina.foto[e.f]; });
+      const str = '{"el":[' + els.map(apJsonEl).join(',') + '],"foto":' + JSON.stringify(foto) + '}';
+      const y1 = maxFine(els);
+      if (Math.max(y1, (c && c.y1) || 0) > (k + 1) * AP_FOGLIO) png[k + 1] = 1;
+      ed.cache[k] = { letto: true, str, refs: els.slice(), fp, y1 };
+      fogli.push(str); cambiati.push(k); png[k] = 1;
+    }
+    if (ed.cache.length > n) ed.cache.length = n;
+    // titoletti: l'immagine dei fogli dove sono (prima e dopo)
+    const tit = JSON.stringify(ed.pagina.titoletti || []);
+    if (tit !== ed.ultimiTit) {
+      JSON.parse(ed.ultimiTit).concat(ed.pagina.titoletti || []).forEach(t => { png[Math.max(0, Math.floor(t.y / AP_FOGLIO))] = 1; });
+      ed.ultimiTit = tit;
+    }
+    ed.ultimoSfondo = JSON.stringify(ed.pagina.sfondo);
+    const salvata = { v: 2, id: ed.pagina.id, modificato: ed.pagina.modificato, sfondo: ed.pagina.sfondo, titoletti: ed.pagina.titoletti || [], alt: AP_FOGLIO, fogli };
+    return { salvata, cambiati, png: Object.keys(png).map(Number).filter(k => k < n) };
+  };
+
+  /**
+   * Annulla senza copiare la pagina: si tiene l'elenco degli elementi (solo i riferimenti) e una copia delle caselle di
+   * testo e dei titoletti. Chi sta per essere modificato sul posto (sposta, ridimensiona, colore, inserisci spazio) viene
+   * prima sostituito da una sua copia (prima(ids)): l'elenco vecchio resta intatto.
+   */
+  function istantanea() {
+    return { el: ed.pagina.el.slice(), testi: ed.pagina.el.filter(e => e.t === 'testo').map(e => Object.assign({}, e)), tit: JSON.stringify(ed.pagina.titoletti || []) };
+  }
+  function ripristina(s) {
+    const testi = {};
+    s.testi.forEach(t => { testi[t.id] = t; });
+    ed.pagina.el = s.el.map(e => e.t === 'testo' && testi[e.id] ? Object.assign({}, testi[e.id]) : e);
+    ed.pagina.titoletti = JSON.parse(s.tit);
+    ed.muta = true;
+  }
+  function clona(e) { const c = Object.assign({}, e); if (e.p) c.p = e.p.slice(); return c; }
+  function prima(ids) {
+    ed.storia.push(istantanea());
+    if (ed.storia.length > 60) ed.storia.shift();
+    ed.futuro = [];
+    if (ids && ids.length) {
+      const da = {};
+      ids.forEach(id => { da[id] = 1; });
+      const el = ed.pagina.el;
+      for (let i = 0; i < el.length; i++) if (da[el[i].id] && el[i].t !== 'testo') el[i] = clona(el[i]);
+      ed.muta = true;
+    }
+  }
   function cambiato(subito) {
+    ed.muta = true;
     clearTimeout(salvataggioT);
-    const fai = () => { pulisciFoto(); if (opz.salvataggio) opz.salvataggio(ed.pagina); };
+    const fai = () => { salvataggioT = null; if (opz.salvataggio) opz.salvataggio(ed); };
     if (subito) fai(); else salvataggioT = setTimeout(fai, 1200);
+    if (ed.indiceAperto) disegnaIndice();
   }
-  ed.salvaSubito = () => { if (salvataggioT) { clearTimeout(salvataggioT); salvataggioT = null; leggiTesti(); pulisciFoto(); if (opz.salvataggio) opz.salvataggio(ed.pagina); } };
-  function pulisciFoto() {
-    const usate = {};
-    ed.pagina.el.forEach(e => { if (e.t === 'foto') usate[e.f] = 1; });
-    // le foto tolte restano finché si possono ancora riprendere con "annulla" (nella storia)
-    const storia = ed.storia.join('');
-    Object.keys(ed.pagina.foto).forEach(k => { if (!usate[k] && storia.indexOf('"f":"' + k + '"') < 0) delete ed.pagina.foto[k]; });
-  }
+  ed.salvaSubito = () => { if (salvataggioT) { clearTimeout(salvataggioT); salvataggioT = null; leggiTesti(); if (opz.salvataggio) opz.salvataggio(ed); } };
   function annulla() {
     if (!ed.storia.length) return;
     ed.futuro.push(istantanea());
-    ed.pagina.el = JSON.parse(ed.storia.pop());
+    ripristina(ed.storia.pop());
     ed.sel = []; montaTesti(); ridisegna(); cambiato();
   }
   function ripeti() {
     if (!ed.futuro.length) return;
     ed.storia.push(istantanea());
-    ed.pagina.el = JSON.parse(ed.futuro.pop());
+    ripristina(ed.futuro.pop());
     ed.sel = []; montaTesti(); ridisegna(); cambiato();
   }
   const nid = () => Math.random().toString(36).slice(2, 9);
+
+  /**
+   * Indice per disegnare solo i fogli visibili: elementi divisi per foglio (posizioni nell'elenco, in ordine), fine più
+   * bassa di ogni foglio (un tratto può scendere nel foglio sotto) e misure della pagina. Si rifà quando l'elenco cambia.
+   */
+  function indice() {
+    const el = ed.pagina.el;
+    const ix = ed._ix;
+    if (ix && !ed.muta && ix.arr === el && ix.len === el.length) return ix;
+    const gruppi = [], fine = [];
+    let x1 = AP_LARGHEZZA, y1 = 400;
+    for (let i = 0; i < el.length; i++) {
+      const e = el[i];
+      const b = e.t === 'testo' ? { x1: e.x + e.w, y0: e.y, y1: e.y + (e._h || 60) } : apRiquadro(e);
+      const k = Math.max(0, Math.floor(b.y0 / AP_FOGLIO));
+      (gruppi[k] = gruppi[k] || []).push(i);
+      if (!(fine[k] >= b.y1)) fine[k] = b.y1;
+      if (b.x1 > x1) x1 = b.x1;
+      if (b.y1 > y1) y1 = b.y1;
+    }
+    ed.muta = false;
+    ed._ix = { arr: el, len: el.length, gruppi, fine, L: { w: Math.ceil(x1 + 40), h: Math.ceil(y1 + 40) } };
+    return ed._ix;
+  }
+  function limiti() { return indice().L; }
+  ed.limiti = limiti;
+  /** Posizioni (nell'elenco) degli elementi che possono toccare il riquadro y0..y1, in ordine di disegno. */
+  function visibili(y0, y1) {
+    const ix = indice(), out = [];
+    for (let k = 0; k < ix.gruppi.length; k++) {
+      const g = ix.gruppi[k];
+      if (!g || k * AP_FOGLIO > y1 || ix.fine[k] < y0) continue;
+      for (let i = 0; i < g.length; i++) out.push(g[i]);
+    }
+    return out.sort((a, b) => a - b);
+  }
 
   // ── vista e disegno ──
   function dimensiona() {
@@ -1315,13 +1696,23 @@ function creaEditor(box, pagina, opz) {
     W = vista.clientWidth; H = vista.clientHeight;
     [tela, vivo].forEach(c => { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.width = W + 'px'; c.style.height = H + 'px'; });
     // telefono: la prima volta la pagina si vede intera in larghezza (poi due dita per lo zoom)
-    if (!ed.zoomFatto && W) { ed.zoomFatto = true; if (W < 700 && !rapido) ed.v.z = Math.max(0.25, Math.min(1, W / apLimiti(ed.pagina).w)); }
+    if (!ed.zoomFatto && W) { ed.zoomFatto = true; if (W < 700 && !rapido) ed.v.z = Math.max(0.25, Math.min(1, W / limiti().w)); }
     ridisegna();
+    if (ed.indiceAperto) disegnaIndice();   // i numeri di schermo dipendono dall'altezza
   }
   function aPagina(cx, cy) { const r = vista.getBoundingClientRect(); return { x: ed.v.x + (cx - r.left) / ed.v.z, y: ed.v.y + (cy - r.top) / ed.v.z }; }
+  /**
+   * v12: la pagina "si allunga da sola": si può scorrere finché l'ultima riga scritta arriva in cima allo schermo, quindi
+   * sotto c'è sempre (quasi) uno schermo vuoto per continuare. Lo spazio vuoto non si salva (la pagina finisce dove
+   * finisce il contenuto). Nell'appunto rapido resta come prima.
+   */
+  function maxScorri(L) {
+    if (rapido) return Math.max(0, L.h + H * 0.6 / ed.v.z - H / ed.v.z + 200);
+    return Math.max(0, L.h - 100);
+  }
   function limitaVista() {
-    const L = apLimiti(ed.pagina);
-    const maxX = Math.max(0, Math.max(L.w, AP_LARGHEZZA) - W / ed.v.z + 120), maxY = Math.max(0, L.h + H * 0.6 / ed.v.z - H / ed.v.z + 200);
+    const L = limiti();
+    const maxX = Math.max(0, Math.max(L.w, AP_LARGHEZZA) - W / ed.v.z + 120), maxY = maxScorri(L);
     ed.v.x = Math.max(0, Math.min(maxX, ed.v.x));
     ed.v.y = Math.max(0, Math.min(maxY, ed.v.y));
     return L;
@@ -1339,15 +1730,76 @@ function creaEditor(box, pagina, opz) {
     ctx.setTransform(dpr * z, 0, 0, dpr * z, -ed.v.x * dpr * z, -ed.v.y * dpr * z);
     const v = { x0: ed.v.x, y0: ed.v.y, x1: ed.v.x + W / z, y1: ed.v.y + H / z };
     apSfondo(ctx, ed.pagina.sfondo, v.x0 - 1, v.y0 - 1, v.x1 + 1, v.y1 + 1);
-    apDisegnaElementi(ctx, ed.pagina, v, false);
+    disegnaVisibili(ctx, v);
     strato.style.transform = 'translate(' + (-ed.v.x * z) + 'px,' + (-ed.v.y * z) + 'px) scale(' + z + ')';
     disegnaSelezione();
-    info.textContent = Math.round(z * 100) + ' %';
-    const tot = Math.max(L.h, ed.v.y + H / z);
-    barretta.style.height = Math.max(8, H / z / tot * 100) + '%';
-    barretta.style.top = (ed.v.y / tot * 100) + '%';
+    const sch = H / z;
+    const tot = maxScorri(L) + sch;
+    const nSch = Math.max(1, Math.ceil(tot / sch - 0.05));
+    info.textContent = (ed.caricando ? 'apro… · ' : '') + (nSch > 1 && !rapido ? 'schermo ' + Math.min(nSch, Math.floor(ed.v.y / sch + 0.5) + 1) + ' di ' + nSch + ' · ' : '') + Math.round(z * 100) + ' %';
+    // barra a destra: posizione nella pagina (trascinabile) e tacche dei titoletti
+    const hb = Math.max(4, sch / tot * 100);
+    barretta.style.height = hb + '%';
+    const maxY = maxScorri(L);
+    barretta.style.top = (maxY > 0 ? Math.min(1, ed.v.y / maxY) * (100 - hb) : 0) + '%';
+    barraBox.classList.toggle('ed-barra-lunga', tot > sch * 1.5 && !rapido);
+    if (ed.indiceAperto) {
+      const a = titolettoVicino(), id = a ? a.id : '';
+      if (id !== ed._indAtt) { ed._indAtt = id; $$('.ed-ind-voce', box).forEach(v => v.classList.toggle('attiva', v.dataset.id === id)); }
+      const qui = schermoDi(ed.v.y + 70 / ed.v.z), bq = $('.ed-ind-piu', box);
+      if (bq && bq.dataset.n !== String(qui)) { bq.dataset.n = qui; bq.textContent = '＋ titoletto qui (schermo ' + qui + ')'; }
+    }
+    const tacche = (ed.pagina.titoletti || []).map(t => Math.round(t.y / tot * 1000) / 10).join(',');
+    if (tacche !== barraBox.dataset.tacche) {
+      barraBox.dataset.tacche = tacche;
+      $$('.ed-tacca', barraBox).forEach(x => x.remove());
+      (ed.pagina.titoletti || []).forEach(t => { const d = document.createElement('i'); d.className = 'ed-tacca'; d.style.top = Math.min(99, t.y / tot * 100) + '%'; barraBox.appendChild(d); });
+    }
   }
   ed.ridisegna = ridisegna;
+  /** Disegna solo gli elementi dei fogli visibili (le caselle di testo sono HTML, sopra la tela). */
+  function disegnaVisibili(c, v) {
+    const foto = ed.pagina.foto || {};
+    const el = ed.pagina.el;
+    visibili(v.y0, v.y1).forEach(i => {
+      const e = el[i];
+      if (e.t === 'testo') return;
+      const b = apRiquadro(e);
+      if (b.x1 < v.x0 || b.x0 > v.x1 || b.y1 < v.y0 || b.y0 > v.y1) return;
+      if (e.t === 'tratto') apTratto(c, e);
+      else if (e.t === 'foto') {
+        const im = foto[e.f] ? apImmagine(foto[e.f]) : null;
+        if (im && im.complete && im.naturalWidth) c.drawImage(im, e.x, e.y, e.w, e.h);
+        else { c.fillStyle = 'rgba(128,128,128,.25)'; c.fillRect(e.x, e.y, e.w, e.h); }
+      }
+    });
+  }
+
+  // ── barra di scorrimento: si trascina per saltare (col dito, la penna o il mouse); mentre si trascina dice dove si è ──
+  const barraBox = $('.ed-barretta', box), fumetto = $('.ed-fumetto', box);
+  function vaiBarra(cy, r) {
+    const L = limiti(), sch = H / ed.v.z, tot = maxScorri(L) + sch;
+    const t = Math.max(0, Math.min(1, (cy - r.top) / r.height));
+    ed.v.y = Math.max(0, t * maxScorri(L));
+    ridisegna();
+    const nSch = Math.max(1, Math.ceil(tot / sch - 0.05));
+    const n = Math.min(nSch, Math.floor(ed.v.y / sch + 0.5) + 1);
+    const centro = ed.v.y + sch / 2;
+    const vicino = (ed.pagina.titoletti || []).filter(x => x.y <= centro + sch * 0.4).sort((a, b) => b.y - a.y)[0];
+    fumetto.innerHTML = 'schermo ' + n + ' di ' + nSch + (vicino ? ' · 🏷 ' + esc(vicino.testo || 'scritto a mano') : '');
+    fumetto.hidden = false;
+    fumetto.style.top = Math.max(4, Math.min(H - 34, cy - vista.getBoundingClientRect().top - 14)) + 'px';
+  }
+  barraBox.addEventListener('pointerdown', ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    try { barraBox.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
+    const r = barraBox.getBoundingClientRect();
+    barraBox.classList.add('trascino');
+    vaiBarra(ev.clientY, r);
+    const mv = m => vaiBarra(m.clientY, r);
+    const su = () => { barraBox.removeEventListener('pointermove', mv); barraBox.removeEventListener('pointerup', su); barraBox.removeEventListener('pointercancel', su); barraBox.classList.remove('trascino'); fumetto.hidden = true; };
+    barraBox.addEventListener('pointermove', mv); barraBox.addEventListener('pointerup', su); barraBox.addEventListener('pointercancel', su);
+  });
 
   // ── caselle di testo (HTML) ──
   function montaTesti() {
@@ -1357,8 +1809,93 @@ function creaEditor(box, pagina, opz) {
     sel.className = 'ed-sel'; sel.hidden = true;
     sel.innerHTML = '<span class="ed-maniglia" data-m="ridim"></span>';
     strato.appendChild(sel);
+    montaTitoletti();
     modoStrato();
   }
+
+  // ── v12: titoletti (segnalibri nella pagina) e indice ──
+  function titoletti() { return ed.pagina.titoletti || (ed.pagina.titoletti = []); }
+  function montaTitoletti() {
+    let c = strato.querySelector('.ed-titoletti');
+    if (!c) { c = document.createElement('div'); c.className = 'ed-titoletti'; strato.insertBefore(c, strato.firstChild); }
+    const larga = Math.max(AP_LARGHEZZA, limiti().w);
+    c.innerHTML = titoletti().map(t => `<div class="ed-tit" style="top:${t.y - 25}px;width:${larga - 8}px"><span class="ed-tit-fl" data-id="${esc(t.id)}">🏷 ${esc(t.testo || '')}</span><i></i></div>`).join('');
+  }
+  function schermoDi(y) { return Math.floor(y / Math.max(1, H / ed.v.z)) + 1; }
+  function titolettoVicino() {
+    const sch = H / ed.v.z;
+    return titoletti().filter(x => x.y <= ed.v.y + sch * 0.8).sort((a, b) => b.y - a.y)[0] || null;
+  }
+  function vaiA(t) {
+    ed.v.y = Math.max(0, t.y - 70 / ed.v.z);
+    ridisegna();
+    if (ed.indiceAperto) disegnaIndice();
+  }
+  function nuovoTitoletto(zona) {
+    const y = zona ? Math.round(zona[1]) : Math.round(ed.v.y + 70 / ed.v.z);
+    apChiedi(zona ? 'Titoletto — nome a tastiera (facoltativo: vuoto = resta la scritta a mano)' : 'Titoletto qui (schermo ' + schermoDi(y) + ') — nome', '').then(nome => {
+      if (nome === null) return;
+      nome = String(nome).trim().slice(0, 80);
+      if (!nome && !zona) return;
+      prima();
+      const t = { id: nid(), y, testo: nome };
+      if (zona) t.zona = zona.map(v => Math.round(v));
+      titoletti().push(t);
+      titoletti().sort((a, b) => a.y - b.y);
+      ed.sel = [];
+      montaTitoletti(); ridisegna(); cambiato();
+      toast(nome ? 'Titoletto «' + nome + '» nell\'indice' : 'Titoletto a mano nell\'indice');
+    });
+  }
+  function menuTitoletto(id) {
+    const t = titoletti().find(x => x.id === id);
+    if (!t) return;
+    apScegli('🏷 ' + (t.testo || 'Titoletto scritto a mano'), [['vai', 'Vai qui'], ['nome', '✎ Rinomina'], ['togli', '🗑 Togli il titoletto (la scrittura resta)']]).then(a => {
+      if (a === 'vai') vaiA(t);
+      if (a === 'nome') apChiedi('Nome del titoletto', t.testo || '').then(nome => {
+        if (nome === null) return;
+        prima(); const x = titoletti().find(q => q.id === id); if (x) x.testo = String(nome).trim().slice(0, 80);
+        montaTitoletti(); ridisegna(); cambiato();
+      });
+      if (a === 'togli') { prima(); ed.pagina.titoletti = titoletti().filter(x => x.id !== id); montaTitoletti(); ridisegna(); cambiato(); }
+    });
+  }
+  /** Miniatura della scrittura a mano di un titoletto (per l'indice). */
+  function miniTitoletto(cv, t) {
+    const z = t.zona, w = Math.max(10, z[2] - z[0]), h = Math.max(10, z[3] - z[1]);
+    const k = Math.min(cv.width / w, cv.height / h, 1.2);
+    const c = cv.getContext('2d');
+    c.setTransform(k, 0, 0, k, -z[0] * k, -z[1] * k);
+    const el = ed.pagina.el;
+    visibili(z[1], z[3]).forEach(i => { const e = el[i]; if (e.t !== 'tratto') return; const b = apRiquadro(e); if (b.x1 >= z[0] && b.x0 <= z[2] && b.y1 >= z[1] && b.y0 <= z[3]) apTratto(c, e); });
+  }
+  function disegnaIndice() {
+    const p = $('.ed-indice', box);
+    vista.classList.toggle('con-indice', !!ed.indiceAperto && W > 560);
+    if (!ed.indiceAperto) { p.hidden = true; return; }
+    p.hidden = false;
+    const tt = titoletti().slice().sort((a, b) => a.y - b.y);
+    const att = titolettoVicino();
+    p.innerHTML = `<div class="ed-ind-testa"><b>☰ Indice</b><small>${tt.length ? tt.length + (tt.length === 1 ? ' titoletto' : ' titoletti') : ''}</small><button type="button" data-x="1" title="Chiudi">✕</button></div>
+      <div class="ed-ind-lista">${tt.map(t => `<div class="ed-ind-voce ${att && att.id === t.id ? 'attiva' : ''}" data-id="${esc(t.id)}">
+          <span class="ed-ind-t">${t.testo ? esc(t.testo) : ''}${t.zona ? '<canvas width="150" height="34"></canvas>' : ''}${!t.testo && t.zona ? '<small>✍ scritto a mano</small>' : ''}</span>
+          <span class="ed-ind-n">sch. ${schermoDi(t.y)}</span>
+          <button type="button" data-m="${esc(t.id)}" title="Rinomina o togli">⋯</button></div>`).join('') ||
+        '<p class="piccolo">Nessun titoletto. Segna un punto con «＋ titoletto qui», oppure seleziona una scritta col lazo e premi «🏷 titoletto».</p>'}</div>
+      <button type="button" class="ed-ind-piu">＋ titoletto qui (schermo ${schermoDi(ed.v.y + 70 / ed.v.z)})</button>
+      <p class="piccolo">Tocca un titoletto per andarci.</p>`;
+    tt.forEach(t => { if (!t.zona) return; const cv = p.querySelector('.ed-ind-voce[data-id="' + CSS.escape(t.id) + '"] canvas'); if (cv) miniTitoletto(cv, t); });
+    p.querySelector('[data-x]').onclick = () => { ed.indiceAperto = false; LS.set('apIndice', false); disegnaIndice(); aggiornaBottoneIndice(); };
+    p.querySelector('.ed-ind-piu').onclick = () => nuovoTitoletto(null);
+    $$('.ed-ind-voce', p).forEach(v => v.onclick = ev => {
+      const m = ev.target.closest('[data-m]');
+      if (m) { menuTitoletto(m.dataset.m); return; }
+      const t = titoletti().find(x => x.id === v.dataset.id);
+      if (t) vaiA(t);
+    });
+  }
+  function aggiornaBottoneIndice() { const b = $('.ed-b-indice', box); if (b) b.classList.toggle('attivo', !!ed.indiceAperto); }
+  ed.indiceAperto = !rapido && LS.get('apIndice', false);
   function nodoTesto(e) {
     const d = document.createElement('div');
     d.className = 'ed-testo';
@@ -1382,7 +1919,14 @@ function creaEditor(box, pagina, opz) {
     setTimeout(() => { e._h = guscio.offsetHeight; }, 0);
     return guscio;
   }
-  function elDi(id) { return ed.pagina.el.find(x => x.id === id); }
+  function elDi(id) {
+    const el = ed.pagina.el, m = ed._mappa;
+    if (m && m.arr === el && m.len === el.length) { const e = m.per[id]; if (e && el[m.pos[id]] === e) return e; }
+    const per = {}, pos = {};
+    for (let i = 0; i < el.length; i++) { per[el[i].id] = el[i]; pos[el[i].id] = i; }
+    ed._mappa = { arr: el, len: el.length, per, pos };
+    return per[id];
+  }
   function htmlPulito(d) {
     const c = d.cloneNode(true);
     $$('.ed-sposta-testo,.ed-larg-testo', c).forEach(x => x.remove());
@@ -1408,7 +1952,7 @@ function creaEditor(box, pagina, opz) {
       }
       if (html !== e.html) { if (primaHtml) { ed.storia.push(primaHtml); ed.futuro = []; } e.html = html; e._h = g.offsetHeight; cambiato(); }
     });
-    d.addEventListener('input', () => { e.html = htmlPulito(d); e._h = g.offsetHeight; scorciatoie(d); cambiato(); });
+    d.addEventListener('input', () => { ed.ultimoTocco = Date.now(); e.html = htmlPulito(d); e._h = g.offsetHeight; scorciatoie(d); cambiato(); });
     d.addEventListener('keydown', ev => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') { ev.preventDefault(); d.blur(); annulla(); }
       if (ev.key === 'Escape') d.blur();
@@ -1473,7 +2017,7 @@ function creaEditor(box, pagina, opz) {
     return e;
   }
   ed.aggiungiTesto = html => {
-    const L = apLimiti(ed.pagina);
+    const L = limiti();
     const e = nuovoTesto(40, Math.max(60, L.h - 20), html);
     ed.v.y = Math.max(0, e.y - 60); ridisegna();
     cambiato(true);
@@ -1545,7 +2089,7 @@ function creaEditor(box, pagina, opz) {
       barra = document.createElement('div');
       barra.className = 'ed-barra-sel';
       barra.innerHTML = `<button type="button" data-s="colore">● colore</button><button type="button" data-s="copia">⧉ copia</button>
-        <button type="button" data-s="elimina">🗑 elimina</button><button type="button" data-s="sposta">↗ sposta in…</button><button type="button" data-s="spazio">⇕ inserisci spazio</button>`;
+        <button type="button" data-s="elimina">🗑 elimina</button><button type="button" data-s="sposta">↗ sposta in…</button><button type="button" data-s="spazio">⇕ inserisci spazio</button>${rapido ? '' : '<button type="button" data-s="titoletto">🏷 titoletto</button>'}`;
       vista.appendChild(barra);
       $$('button', barra).forEach(bt => bt.onclick = () => azioneSel(bt.dataset.s));
     }
@@ -1557,7 +2101,7 @@ function creaEditor(box, pagina, opz) {
     if (!ed.sel.length) return;
     if (a === 'elimina') { prima(); ed.pagina.el = ed.pagina.el.filter(e => ed.sel.indexOf(e.id) < 0); ed.sel = []; montaTesti(); ridisegna(); cambiato(); }
     if (a === 'colore') {
-      prima();
+      prima(ed.sel);
       ed.sel.forEach(id => { const e = elDi(id); if (e.t === 'tratto' && !e.ev) e.c = pref.colore || colorePenne()[0]; if (e.t === 'testo') e.c = pref.colore || colorePenne()[0]; });
       montaTesti(); ridisegna(); cambiato();
       toast('Colore: quello della penna scelta');
@@ -1569,6 +2113,7 @@ function creaEditor(box, pagina, opz) {
       ed.sel = nuovi.map(x => x.id); montaTesti(); ridisegna(); cambiato();
     }
     if (a === 'spazio') { scegliStrumento('spazio'); toast('Trascina in giù dal punto dove vuoi lo spazio'); }
+    if (a === 'titoletto') { const b = riquadroSel(); if (b) nuovoTitoletto([b.x0, b.y0, b.x1, b.y1]); }
     if (a === 'sposta' && opz.spostaIn) opz.spostaIn(ed.sel.map(id => JSON.parse(JSON.stringify(elDi(id)))), ed.pagina.foto, () => {
       prima(); ed.pagina.el = ed.pagina.el.filter(e => ed.sel.indexOf(e.id) < 0); ed.sel = []; montaTesti(); ridisegna(); cambiato(true);
     });
@@ -1581,7 +2126,7 @@ function creaEditor(box, pagina, opz) {
     if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] = ox + (e.p[i] - ox) * k; e.p[i + 1] = oy + (e.p[i + 1] - oy) * k; } e.s = Math.max(1, e.s * k); apTogliRiquadro(e); }
     else { e.x = ox + (e.x - ox) * k; e.y = oy + (e.y - oy) * k; e.w = Math.max(40, e.w * k); if (e.t === 'foto') e.h = e.h * k; if (e.t === 'testo') e.fs = Math.max(10, Math.round((e.fs || 18) * k)); }
   }
-  function arrotonda(e) { if (e.t === 'tratto') e.p = e.p.map(v => Math.round(v * 10) / 10); else { e.x = Math.round(e.x); e.y = Math.round(e.y); e.w = Math.round(e.w); if (e.h) e.h = Math.round(e.h); } }
+  function arrotonda(e) { apTogliRiquadro(e); if (e.t === 'tratto') e.p = e.p.map(v => Math.round(v * 10) / 10); else { e.x = Math.round(e.x); e.y = Math.round(e.y); e.w = Math.round(e.w); if (e.h) e.h = Math.round(e.h); } }
   function dentroPoligono(x, y, poli) {
     let dentro = false;
     for (let i = 0, j = poli.length - 2; i < poli.length; j = i, i += 2) {
@@ -1591,7 +2136,11 @@ function creaEditor(box, pagina, opz) {
     return dentro;
   }
   function selezionaCon(poli) {
+    let px0 = 1e9, py0 = 1e9, px1 = -1e9, py1 = -1e9;
+    for (let i = 0; i < poli.length; i += 2) { px0 = Math.min(px0, poli[i]); px1 = Math.max(px1, poli[i]); py0 = Math.min(py0, poli[i + 1]); py1 = Math.max(py1, poli[i + 1]); }
     ed.sel = ed.pagina.el.filter(e => {
+      const bb = e.t === 'testo' ? { x0: e.x, y0: e.y, x1: e.x + e.w, y1: e.y + (e._h || 40) } : apRiquadro(e);
+      if (bb.x1 < px0 || bb.x0 > px1 || bb.y1 < py0 || bb.y0 > py1) return false;
       if (e.t === 'tratto') {
         let k = 0, tot = 0;
         for (let i = 0; i < e.p.length; i += 2) { tot++; if (dentroPoligono(e.p[i], e.p[i + 1], poli)) k++; }
@@ -1629,7 +2178,12 @@ function creaEditor(box, pagina, opz) {
   // ── gomme ──
   function gommaTratto(x, y, r) {
     const prima0 = ed.pagina.el.length;
-    ed.pagina.el = ed.pagina.el.filter(e => e.t !== 'tratto' || !vicinoATratto(e, x, y, r));
+    ed.pagina.el = ed.pagina.el.filter(e => {
+      if (e.t !== 'tratto') return true;
+      const b = apRiquadro(e);
+      if (x + r < b.x0 || x - r > b.x1 || y + r < b.y0 || y - r > b.y1) return true;
+      return !vicinoATratto(e, x, y, r);
+    });
     return ed.pagina.el.length !== prima0;
   }
   function gommaArea(x, y, r) {
@@ -1660,7 +2214,9 @@ function creaEditor(box, pagina, opz) {
   let gesto = null, azione = null, penneViste = false;
   function dimDita() { return Object.keys(dita).map(k => dita[k]); }
   vista.addEventListener('pointerdown', ev => {
-    if (ev.target.closest('.ed-barra-sel')) return;
+    if (ev.target.closest('.ed-barra-sel,.ed-barretta,.ed-indice,.ed-fumetto')) return;
+    const fl = ev.target.closest('.ed-tit-fl');
+    if (fl && ev.pointerType !== 'pen') { ev.preventDefault(); menuTitoletto(fl.dataset.id); return; }
     const suTesto = ev.target.closest('.ed-guscio-testo');
     if (ev.pointerType === 'touch') {
       if (suTesto && ed.strumento === 'testo') return;   // il dito sulla casella: la tastiera la gestisce lei
@@ -1677,6 +2233,8 @@ function creaEditor(box, pagina, opz) {
     }
     if (ev.button !== 0 && !(ev.buttons & 32)) return;
     if (opz.soloLettura) return;
+    if (ed.caricando) { toast('Un attimo: sto aprendo la pagina'); return; }
+    ed.ultimoTocco = Date.now();
     if (suTesto && (ed.strumento === 'testo' || ev.target.closest('.ed-sposta-testo,.ed-larg-testo'))) return;
     const attivo = document.activeElement;
     if (attivo && attivo.classList && attivo.classList.contains('ed-testo')) attivo.blur();
@@ -1698,14 +2256,15 @@ function creaEditor(box, pagina, opz) {
     } else if (str === 'lazo') {
       const b = riquadroSel();
       const man = ev.target.closest('.ed-maniglia');
-      if (b && man) { prima(); azione = { tipo: 'ridim', p0: p, b, orig: ed.sel.map(id => JSON.parse(JSON.stringify(elDi(id)))) }; }
-      else if (b && p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1) { prima(); azione = { tipo: 'muovi', p0: p, ultimo: p, mosso: false }; }
+      if (b && man) { prima(ed.sel); azione = { tipo: 'ridim', p0: p, b, orig: ed.sel.map(id => JSON.parse(JSON.stringify(elDi(id)))) }; }
+      else if (b && p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1) { prima(ed.sel); azione = { tipo: 'muovi', p0: p, ultimo: p, mosso: false }; }
       else azione = { tipo: 'lazo', poli: [p.x, p.y], p0: p };
     } else if (str === 'testo') {
       azione = { tipo: 'testo', p0: p, c0: { x: ev.clientX, y: ev.clientY } };
     } else if (str === 'spazio') {
-      prima();
-      azione = { tipo: 'spazio', y0: p.y, dy: 0, sotto: ed.pagina.el.filter(e => (e.t === 'tratto' ? apRiquadro(e).y0 : e.y) >= p.y).map(e => e.id) };
+      const sotto = ed.pagina.el.filter(e => (e.t === 'tratto' ? apRiquadro(e).y0 : e.y) >= p.y).map(e => e.id);
+      prima(sotto);
+      azione = { tipo: 'spazio', y0: p.y, dy: 0, sotto, tit: titoletti().filter(t => t.y >= p.y).map(t => t.id) };
     }
   });
   const r1 = v => Math.round(v * 10) / 10;
@@ -1734,6 +2293,7 @@ function creaEditor(box, pagina, opz) {
       const dx = q.x - azione.ultimo.x, dy = q.y - azione.ultimo.y;
       if (Math.abs(dx) + Math.abs(dy) > 0) azione.mosso = true;
       ed.sel.forEach(id => trasla(elDi(id), dx, dy));
+      ed.muta = true;
       azione.ultimo = q;
       $$('.ed-guscio-testo', strato).forEach(g => { const e = elDi(g.dataset.id); if (e && ed.sel.indexOf(e.id) >= 0) { g.style.left = e.x + 'px'; g.style.top = e.y + 'px'; } });
       ridisegna();
@@ -1745,12 +2305,15 @@ function creaEditor(box, pagina, opz) {
         Object.assign(e, JSON.parse(JSON.stringify(o)));
         scala(e, b.x0 + 6, b.y0 + 6, k);
       });
+      ed.muta = true;
       montaTesti(); ridisegna();
     } else if (azione.tipo === 'spazio') {
       const q = aPagina(ev.clientX, ev.clientY);
       const dy = Math.max(-(azione.y0 - 0), q.y - azione.y0) - azione.dy;
       azione.dy += dy;
       azione.sotto.forEach(id => { const e = elDi(id); if (e) trasla(e, 0, dy); });
+      titoletti().forEach(t => { if (azione.tit.indexOf(t.id) >= 0) { t.y += dy; if (t.zona) { t.zona[1] += dy; t.zona[3] += dy; } } });
+      ed.muta = true;
       montaTesti(); ridisegna();
       guidaSpazio(azione.y0, azione.dy);
     }
@@ -1785,6 +2348,7 @@ function creaEditor(box, pagina, opz) {
       ridisegna();
     } else if (a.tipo === 'muovi') {
       if (a.mosso) { ed.sel.forEach(id => arrotonda(elDi(id))); cambiato(); } else ed.storia.pop();
+      ed.muta = true;
       ridisegna();
     } else if (a.tipo === 'ridim') { ed.sel.forEach(id => arrotonda(elDi(id))); montaTesti(); ridisegna(); cambiato(); }
     else if (a.tipo === 'testo') {
@@ -1955,8 +2519,10 @@ function creaEditor(box, pagina, opz) {
     const a = b.dataset.az;
     if (a === 'annulla') annulla();
     if (a === 'ripeti') ripeti();
+    if (a === 'indice') { ed.indiceAperto = !ed.indiceAperto; LS.set('apIndice', ed.indiceAperto); aggiornaBottoneIndice(); disegnaIndice(); }
+    if (a === 'titoletto') nuovoTitoletto(null);
     if (a === 'foto') $('#ed-file', box).click();
-    if (a === 'tastiera') { scegliStrumento('testo'); const L = apLimiti(ed.pagina); nuovoTesto(24, Math.min(L.h - 30, ed.v.y + 40)); }
+    if (a === 'tastiera') { scegliStrumento('testo'); const L = limiti(); nuovoTesto(24, Math.min(L.h - 30, ed.v.y + 40)); }
     if (a === 'sfondo') apScegli('Sfondo della pagina', [['scuro|vuoto', 'Scuro, vuoto'], ['scuro|righe', 'Scuro a righe'], ['scuro|quadretti', 'Scuro a quadretti'], ['chiaro|vuoto', 'Chiaro, vuoto'], ['chiaro|righe', 'Chiaro a righe'], ['chiaro|quadretti', 'Chiaro a quadretti']])
       .then(v => { if (!v) return; const p = v.split('|'); ed.pagina.sfondo = { colore: p[0], motivo: p[1] }; colori(); ridisegna(); cambiato(); });
   });
@@ -1981,6 +2547,7 @@ function creaEditor(box, pagina, opz) {
   let ro = null;
   if (window.ResizeObserver) { ro = new ResizeObserver(dimensiona); ro.observe(vista); } else window.addEventListener('resize', dimensiona);
   carica(pagina);
+  aggiornaBottoneIndice();
   scegliStrumento(opz.soloLettura ? 'lazo' : 'penna');
   ultimi();
   requestAnimationFrame(dimensiona);
@@ -2018,7 +2585,7 @@ function apSpostaSelezione(elementi, foto, togli) {
     const fotoUsate = {};
     elementi.forEach(e => { if (e.t === 'foto' && foto[e.f]) fotoUsate[e.f] = foto[e.f]; });
     const metti = (id, rec, titolo) => {
-      const p = rec.pagina;
+      const p = apEspansa(apSalvata(rec.pagina));   // v12: la pagina di arrivo si apre intera, poi torna a fogli
       const L = apLimiti(p);
       let y0 = 1e9, x0 = 1e9;
       elementi.forEach(e => { const b = e.t === 'testo' ? { x0: e.x, y0: e.y } : apRiquadro(e); y0 = Math.min(y0, b.y0); x0 = Math.min(x0, b.x0); });
@@ -2030,8 +2597,10 @@ function apSpostaSelezione(elementi, foto, togli) {
       });
       Object.assign(p.foto, fotoUsate);
       p.modificato = new Date().toISOString();
+      rec.pagina = apSalvata(p);
+      rec.intera = true;
       rec.sporca = true;
-      const info = apInfoPagina(p);
+      const info = apInfoDa(p.el, p.titoletti);
       apSalvaRiga(id, Object.assign({ 'Testo': info.testo, 'Da spuntare': info.daSpuntare }, titolo ? { 'Titolo': titolo, 'Sezione': AP_FISSE.daSistemare, 'Creato il': new Date().toISOString() } : {}), true);
       apMem.mini[id] = null;
       return apScrivi(rec).then(() => { togli(); toast('Spostato in «' + (titolo || (apRiga(id) || {}).Titolo || 'appunto') + '»'); apDisegnaElenco(); });
