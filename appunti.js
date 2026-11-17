@@ -756,15 +756,25 @@ function apMontaEditor(box, id, rec) {
         <span class="piccolo">Sezione</span><select id="ap-sez-sel"></select><span class="ap-sotto-sep">›</span><select id="ap-sotto-sel"></select>
         <button type="button" class="ap-icona" id="ap-fissa" title="Fissa in cima">📌</button>
         <button type="button" class="ap-icona" id="ap-piu" title="Altro">⋯</button>
-        <button type="button" class="ap-icona ap-solo-largo" id="ap-larga" title="Pagina a tutta larghezza (nasconde le colonne a sinistra)">⤢</button>
-        <button type="button" class="ap-icona" id="ap-tutto" title="Tutto schermo: resta solo la pagina (Esc per uscire)">⛶</button>
+        <span class="ap-vista-grp" role="group" aria-label="Vista">
+          <button type="button" class="ap-vtg ap-solo-largo" id="ap-v-sez" title="Sezioni: mostra o nasconde le colonne a sinistra"><span class="g">▤</span><span class="t">Sezioni</span></button>
+          <button type="button" class="ap-vtg" id="ap-v-ind" title="Indice dei titoletti"><span class="g">☰</span><span class="t">Indice</span></button>
+          <button type="button" class="ap-vtg" id="ap-v-tutto" title="Schermo intero: resta solo la pagina (Esc per uscire)"><span class="g">⛶</span><span class="t">Schermo intero</span></button>
+        </span>
         <button type="button" class="ap-icona ap-solo-telefono" id="ap-strumenti" title="Strumenti per scrivere">✎</button>
       </div>
       <input id="ap-titolo" class="ap-titolo-in" value="${esc(r.Titolo || '')}" placeholder="Titolo" ${sola ? 'disabled' : ''}>
     </div>
     <div id="ap-proposta"></div>
     <div class="ap-editor" id="ap-editor"></div>
-    <button type="button" class="ap-tutto-btn" id="ap-tutto-btn" title="Strumenti (trascina per spostare)">✎</button>`;
+    <div class="ap-striscia" id="ap-striscia" title="Trascina per spostare · tocco lungo per ripiegare">
+      <span class="presa"></span>
+      <button type="button" data-s="barra" class="sb-penna" title="Barra degli strumenti">✎<small>barra</small></button><span class="sep"></span>
+      <button type="button" data-s="sez" title="Sezioni sopra la pagina">▤<small>sezioni</small></button>
+      <button type="button" data-s="ind" title="Indice dei titoletti">☰<small>indice</small></button>
+      <button type="button" data-s="tutto" class="acceso" title="Esci dallo schermo intero (Esc)">⛶<small>esci</small></button>
+      <button type="button" data-s="apri" class="ripiegata" title="Strumenti (tocca per aprire la striscia)">✎<i>⛶</i></button>
+    </div>`;
   $('.ap-indietro', box).onclick = () => { AP.pannello = 'elenco'; apVai({ a: null }); };
   const ed = creaEditor($('#ap-editor', box), rec.pagina, { soloLettura: sola, salvataggio: pagina => apPaginaCambiata(id, pagina), spostaIn: apSpostaSelezione });
   ed.id = id;
@@ -775,10 +785,12 @@ function apMontaEditor(box, id, rec) {
   if (AP.nuovoTitolo === id) { AP.nuovoTitolo = null; setTimeout(() => { tit.focus(); tit.select(); }, 60); }
   $('#ap-fissa', box).onclick = () => { const x = apRiga(id); apSalvaRiga(id, { 'Fissato': !(x && x.Fissato === true) }, true); apAggiornaTutto(); };
   $('#ap-piu', box).onclick = e => apMenuAppunto(id, e.currentTarget);
-  $('#ap-larga', box).onclick = () => { const g = $('.ap-guscio'); g.classList.toggle('ap-larga'); LS.set('apLarga', g.classList.contains('ap-larga')); $('#ap-larga').classList.toggle('attivo', g.classList.contains('ap-larga')); };
-  $('#ap-larga', box).classList.toggle('attivo', $('.ap-guscio').classList.contains('ap-larga'));
+  // v12.1: Sezioni acceso = colonne a sinistra visibili (il contrario del vecchio ⤢ "a tutta larghezza"); si ricorda come prima
+  $('#ap-v-sez', box).onclick = () => { const g = $('.ap-guscio'); g.classList.toggle('ap-larga'); LS.set('apLarga', g.classList.contains('ap-larga')); apStatoVista(); };
+  $('#ap-v-ind', box).onclick = () => { if (AP.ed && AP.ed.impostaIndice) AP.ed.impostaIndice(!AP.ed.indiceAperto); };
   // telefono: si legge; la barra degli strumenti compare con ✎
   $('#ap-strumenti', box).onclick = () => { const e = $('#ap-editor'); e.classList.toggle('con-barra'); $('#ap-strumenti').classList.toggle('attivo', e.classList.contains('con-barra')); };
+  ed.suIndice = () => apStatoVista();
   ed.aggiornaTesta = () => apTestaEditor(id);
   ed.aggiornaTesta();
   apMontaTutto(box, sola);
@@ -789,51 +801,85 @@ function apMontaEditor(box, id, rec) {
 /** Entra/esce dal tutto schermo (la scelta si ricorda: riaprendo un appunto si torna come l'ultima volta). */
 function apTutto(si) {
   document.body.classList.toggle('ap-tutto', !!si);
+  document.body.classList.remove('ap-cassetto');
   LS.set('apTutto', !!si);
   const e = $('#ap-editor');
   if (e) e.classList.remove('barra-su');
+  apStatoVista();
+}
+
+/**
+ * v12.1: stato acceso/spento dei tre interruttori (barra dell'appunto) e della striscia del tutto schermo.
+ * Acceso = pieno nel colore d'accento, spento = solo contorno (CSS .acceso).
+ */
+function apStatoVista() {
+  const g = $('.ap-guscio'), tutto = document.body.classList.contains('ap-tutto');
+  const sez = tutto ? document.body.classList.contains('ap-cassetto') : !!(g && !g.classList.contains('ap-larga'));
+  const ind = !!(AP.ed && AP.ed.indiceAperto), barra = !!($('#ap-editor') && $('#ap-editor').classList.contains('barra-su'));
+  const metti = (sel, si) => { const b = $(sel); if (b) { b.classList.toggle('acceso', !!si); b.setAttribute('aria-pressed', si ? 'true' : 'false'); } };
+  metti('#ap-v-sez', g && !g.classList.contains('ap-larga')); metti('#ap-v-ind', ind); metti('#ap-v-tutto', tutto);
+  metti('#ap-striscia [data-s="sez"]', sez); metti('#ap-striscia [data-s="ind"]', ind); metti('#ap-striscia [data-s="barra"]', barra);
+  const st = $('#ap-striscia');
+  if (st) {
+    st.classList.toggle('ripiegata', !!LS.get('apStrisciaRipiegata', false));
+    // con la barra degli strumenti richiamata la striscia scende sotto di lei (se stava in alto)
+    const b = $('#ap-editor > .ed-barra');
+    st.style.marginTop = barra && b && st.offsetTop < b.offsetHeight + 6 ? (b.offsetHeight + 6) + 'px' : '';
+  }
 }
 
 function apMontaTutto(box, sola) {
-  // nella barra degli strumenti: "esci dal tutto schermo" (visibile solo a tutto schermo)
-  const barra = $('.ed-barra', box);
-  if (barra) {
-    const esci = document.createElement('button');
-    esci.type = 'button'; esci.className = 'ap-esci-tutto'; esci.title = 'Esci dal tutto schermo (Esc)';
-    esci.innerHTML = '<span>⤡</span><small>esci</small>';
-    esci.onclick = () => apTutto(false);
-    barra.appendChild(esci);
-  }
-  $('#ap-tutto', box).onclick = () => apTutto(true);
-  const btn = $('#ap-tutto-btn', box);
+  $('#ap-v-tutto', box).onclick = () => apTutto(!document.body.classList.contains('ap-tutto'));
+  // v12.1: striscia del tutto schermo ✎ · ▤ · ☰ · ⛶ (semitrasparente, trascinabile, posizione ricordata).
+  // Tocco su un pulsante = la sua azione; trascinamento (da qualunque punto) = sposta; tocco lungo = ripiega in un pulsante
+  // (tocco sul pulsante ripiegato = riapre la striscia).
+  const st = $('#ap-striscia', box);
+  const azione = s => {
+    const e = $('#ap-editor');
+    if (s === 'barra') { if (!sola && e) e.classList.toggle('barra-su'); }
+    if (s === 'sez') document.body.classList.toggle('ap-cassetto');
+    if (s === 'ind' && AP.ed && AP.ed.impostaIndice) AP.ed.impostaIndice(!AP.ed.indiceAperto);
+    if (s === 'tutto') { apTutto(false); return; }
+    if (s === 'apri') LS.set('apStrisciaRipiegata', false);
+    apStatoVista();
+  };
   const metti = (x, y) => {
     const W = box.clientWidth || window.innerWidth, H = box.clientHeight || window.innerHeight;
-    x = Math.max(4, Math.min(W - 38, x)); y = Math.max(4, Math.min(H - 38, y));
-    btn.style.left = x + 'px'; btn.style.top = y + 'px';
+    x = Math.max(4, Math.min(W - st.offsetWidth - 4, x)); y = Math.max(4, Math.min(H - st.offsetHeight - 4, y));
+    st.style.left = x + 'px'; st.style.top = y + 'px'; st.style.right = '';
     return { x, y };
   };
-  const pos = LS.get('apTuttoPos', null);
-  if (pos) { btn.style.left = pos.x + 'px'; btn.style.top = pos.y + 'px'; } else { btn.style.right = '8px'; btn.style.top = '8px'; }
-  // tocco = barra degli strumenti sopra la pagina (o via); trascinamento = sposta il pulsantino
-  btn.addEventListener('pointerdown', ev => {
+  const pos = LS.get('apStrisciaPos', null);
+  if (pos) { st.style.left = pos.x + 'px'; st.style.top = pos.y + 'px'; } else { st.style.right = '8px'; st.style.top = '8px'; }
+  st.addEventListener('pointerdown', ev => {
     ev.preventDefault(); ev.stopPropagation();
-    const r0 = btn.getBoundingClientRect(), rb = box.getBoundingClientRect();
+    const r0 = st.getBoundingClientRect(), rb = box.getBoundingClientRect();
     const dx = ev.clientX - r0.left, dy = ev.clientY - r0.top, x0 = ev.clientX, y0 = ev.clientY;
-    let mosso = false, ultimo = null;
-    try { btn.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
+    const bersaglio = ev.target.closest('[data-s]');
+    let mosso = false, ultimo = null, lungo = false;
+    const tLungo = setTimeout(() => {
+      lungo = true;
+      LS.set('apStrisciaRipiegata', !LS.get('apStrisciaRipiegata', false));
+      apStatoVista();
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch (e) { /* niente */ }
+    }, 600);
+    try { st.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
     const muovi = e => {
       if (!mosso && Math.hypot(e.clientX - x0, e.clientY - y0) < 8) return;
-      mosso = true; btn.style.right = '';
+      if (!mosso) clearTimeout(tLungo);
+      mosso = true;
       ultimo = metti(e.clientX - rb.left - dx, e.clientY - rb.top - dy);
     };
-    const fine = () => {
-      btn.removeEventListener('pointermove', muovi); btn.removeEventListener('pointerup', fine); btn.removeEventListener('pointercancel', fine);
-      if (mosso) { if (ultimo) LS.set('apTuttoPos', ultimo); return; }
-      if (!sola) $('#ap-editor').classList.toggle('barra-su');
+    const fine = e => {
+      clearTimeout(tLungo);
+      st.removeEventListener('pointermove', muovi); st.removeEventListener('pointerup', fine); st.removeEventListener('pointercancel', fine);
+      if (mosso) { if (ultimo) LS.set('apStrisciaPos', ultimo); return; }
+      if (lungo || e.type === 'pointercancel' || !bersaglio) return;
+      azione(bersaglio.dataset.s);
     };
-    btn.addEventListener('pointermove', muovi); btn.addEventListener('pointerup', fine); btn.addEventListener('pointercancel', fine);
+    st.addEventListener('pointermove', muovi); st.addEventListener('pointerup', fine); st.addEventListener('pointercancel', fine);
   });
-  if (LS.get('apTutto', false)) apTutto(true);
+  if (LS.get('apTutto', false)) apTutto(true); else apStatoVista();
 }
 
 document.addEventListener('keydown', ev => {
@@ -1463,7 +1509,6 @@ function creaEditor(box, pagina, opz) {
         ${rapido ? '' : `<button type="button" data-str="spazio" title="Inserisci spazio: trascina in giù"><span>⇕</span><small>spazio</small></button>
         <button type="button" data-az="foto" title="Foto"><span>🖼</span><small>foto</small></button>
         <button type="button" data-az="sfondo" title="Sfondo della pagina"><span>▦</span><small>sfondo</small></button>
-        <button type="button" data-az="indice" class="ed-b-indice" title="Indice dei titoletti"><span>☰</span><small>indice</small></button>
         <button type="button" data-az="titoletto" title="Segna un titoletto qui (o seleziona col lazo una scritta e premi 🏷)"><span>🏷</span><small>titoletto</small></button>`}
         ${rapido ? '<button type="button" data-az="tastiera" class="ed-tastiera"><span>⌨</span><small>tastiera</small></button>' : ''}
       </div>
@@ -1894,8 +1939,10 @@ function creaEditor(box, pagina, opz) {
       if (t) vaiA(t);
     });
   }
-  function aggiornaBottoneIndice() { const b = $('.ed-b-indice', box); if (b) b.classList.toggle('attivo', !!ed.indiceAperto); }
+  function aggiornaBottoneIndice() { const b = $('.ed-b-indice', box); if (b) b.classList.toggle('attivo', !!ed.indiceAperto); if (ed.suIndice) ed.suIndice(!!ed.indiceAperto); }
   ed.indiceAperto = !rapido && LS.get('apIndice', false);
+  /** v12.1: apre/chiude l'indice (dal gruppo ▤ ☰ ⛶ e dalla striscia del tutto schermo); la scelta si ricorda. */
+  ed.impostaIndice = si => { if (rapido) return; ed.indiceAperto = !!si; LS.set('apIndice', ed.indiceAperto); aggiornaBottoneIndice(); disegnaIndice(); };
   function nodoTesto(e) {
     const d = document.createElement('div');
     d.className = 'ed-testo';

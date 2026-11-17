@@ -557,14 +557,44 @@ body.ap-tutto .ap-testa-app, body.ap-tutto #ap-proposta { display: none; }
 .ap-editor { position: relative; }
 body.ap-tutto .ap-editor > .ed-barra { display: none; }
 body.ap-tutto .ap-editor.barra-su > .ed-barra:not([hidden]) { display: flex; position: absolute; left: 0; right: 0; top: 0; z-index: 8;
-  background: rgba(23, 27, 33, .97); box-shadow: 0 6px 18px rgba(0, 0, 0, .5); padding-right: 56px; }
+  background: rgba(23, 27, 33, .97); box-shadow: 0 6px 18px rgba(0, 0, 0, .5); }
 body.ap-tutto .ap-editor > .ed-barra-testo:not([hidden]) { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; border-top: 1px solid var(--bordo); border-bottom: 0; }
-.ap-esci-tutto { display: none !important; }
-body.ap-tutto .ap-esci-tutto { display: flex !important; border-color: var(--accento); }
-.ap-tutto-btn { display: none; position: absolute; z-index: 9; width: 34px; height: 34px; min-height: 0; min-width: 0; padding: 0; border-radius: 10px;
-  font-size: 17px; line-height: 1; opacity: .45; background: rgba(40, 46, 56, .8); border: 1px solid var(--bordo); color: var(--testo);
-  touch-action: none; user-select: none; -webkit-user-select: none; }
-body.ap-tutto .ap-tutto-btn { display: flex; align-items: center; justify-content: center; }
-body.ap-tutto .ap-editor.barra-su ~ .ap-tutto-btn, .ap-tutto-btn:active { opacity: .9; }
-/* v12: a tutto schermo il pulsantino ✎ sta in alto a destra: l'indice parte più in basso */
-.ap-tutto .ed-indice { padding-top: 54px; }
+/* v12.1 (SPEC v12.1 §1, mockup 55): tre interruttori di vista con icona + parola; acceso = pieno nel colore d'accento,
+   spento = solo contorno. Se la barra dell'appunto è stretta restano le icone (container query: WebView 114 la conosce). */
+.ap-testa-app { container-type: inline-size; }
+.ap-vista-grp { display: inline-flex; gap: 4px; padding: 2px; border-radius: 12px; background: rgba(255, 255, 255, .04); }
+.ap-vtg { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; min-width: 40px; padding: 2px 10px 2px 8px; border-radius: 9px;
+  border: 1.5px solid var(--accento); background: transparent; color: var(--accento); font-size: 14px; white-space: nowrap; }
+.ap-vtg .g { font-size: 16px; line-height: 1; }
+.ap-vtg.acceso { background: var(--accento); color: #0f1a2c; font-weight: 600; }
+@container (max-width: 700px) { .ap-vtg .t { display: none; } .ap-vtg { padding: 2px 8px; justify-content: center; } }
+/* striscia del tutto schermo */
+.ap-striscia { display: none; position: absolute; z-index: 9; align-items: center; gap: 4px; padding: 4px 5px 4px 4px; border-radius: 13px;
+  background: rgba(37, 42, 49, .62); border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  touch-action: none; user-select: none; -webkit-user-select: none; opacity: .8; }
+body.ap-tutto .ap-striscia { display: flex; }
+.ap-striscia:active { opacity: 1; }
+.ap-striscia .presa { width: 8px; height: 26px; margin: 0 1px 0 2px; opacity: .55;
+  background: radial-gradient(circle, #cfd3d8 1.2px, transparent 1.5px) 0 0 / 4px 5px; }
+.ap-striscia .sep { width: 1px; height: 26px; background: rgba(255, 255, 255, .18); }
+.ap-striscia button { width: 44px; height: 40px; min-height: 0; min-width: 0; padding: 0; border-radius: 9px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; line-height: 1; font-size: 16px; border: 1.5px solid rgba(138, 180, 248, .85);
+  background: transparent; color: var(--accento); }
+.ap-striscia button small { font-size: 9px; margin-top: 3px; }
+.ap-striscia button.acceso { background: var(--accento); color: #0f1a2c; font-weight: 600; }
+.ap-striscia button.sb-penna { border-color: rgba(232, 234, 237, .5); color: var(--testo); }
+.ap-striscia button.sb-penna.acceso { background: var(--testo); color: #111; }
+.ap-striscia button.ripiegata { display: none; position: relative; width: 44px; height: 44px; border-radius: 50%; border-color: rgba(232, 234, 237, .4); color: var(--testo); font-size: 18px; }
+.ap-striscia button.ripiegata i { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50%; background: var(--accento);
+  color: #0f1a2c; font-size: 10px; font-style: normal; display: flex; align-items: center; justify-content: center; }
+.ap-striscia.ripiegata { padding: 0; border-radius: 50%; background: transparent; border: 0; box-shadow: none; }
+.ap-striscia.ripiegata > :not(.ripiegata) { display: none; }
+.ap-striscia.ripiegata button.ripiegata { display: flex; background: rgba(37, 42, 49, .62); box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
+/* ▤ dalla striscia: sezioni ed elenco sopra la pagina, senza uscire dal tutto schermo */
+.ap-guscio { position: relative; }
+body.ap-tutto.ap-cassetto .ap-guscio > .ap-sez, body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { display: block; visibility: visible; position: absolute;
+  top: 0; bottom: 0; z-index: 7; overflow: auto; background: var(--sfondo); border-right: 1px solid var(--bordo); box-shadow: 12px 0 26px rgba(0, 0, 0, .5); }
+body.ap-tutto.ap-cassetto .ap-guscio > .ap-sez { left: 0; width: min(230px, 45vw); }
+body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: min(230px, 45vw); width: min(260px, 50vw); }
+/* v12: a tutto schermo la striscia sta in alto a destra: l'indice parte più in basso */
+.ap-tutto .ed-indice { padding-top: 60px; }
