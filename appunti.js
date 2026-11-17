@@ -23,6 +23,64 @@ const AP_FISSE = { daSistemare: 'Da sistemare' };
 const AP_COLORI_SEZ = ['#8ab4f8', '#81c995', '#fdd663', '#c58af9', '#f28b82', '#f6a96c', '#78d9ec', '#e8eaed'];
 const AP_PENNE_SCURO = ['#e8eaed', '#8ab4f8', '#f28b82', '#81c995', '#fdd663', '#c58af9'];
 const AP_PENNE_CHIARO = ['#1a2440', '#1a5fd0', '#c62828', '#2e7d32', '#e0a800', '#7b1fa2'];
+const AP_EVID = ['#fdd663', '#81c995', '#8ab4f8', '#f28b82', '#c58af9'];
+
+// ───────────────────────── v12.3: pallini dei colori personalizzabili (SPEC §4) ─────────────────────────
+// Tocco lungo (dito o penna) o clic destro su un pallino = finestra per cambiarlo; quel pallino resta cambiato, solo su
+// questo dispositivo (localStorage "apPallini" = { penna: { i: colore }, evid: {…}, testo: {…} }), niente nel foglio.
+// Penna: una sola serie (scelta di Daniele): finché un pallino non è cambiato resta il colore di partenza della pagina
+// (scura o chiara); cambiato, vale su tutte e due. I tratti già scritti non cambiano.
+const AP_PALETTA = ['#ffffff', '#e8eaed', '#9aa0a6', '#1a2440', '#8ab4f8', '#4cb3ff', '#1a5fd0', '#78d9ec', '#81c995', '#2e7d32',
+  '#a8e05f', '#fdd663', '#ffb74d', '#ff8a3d', '#f28b82', '#c62828', '#ff6b9a', '#c58af9', '#7b1fa2', '#a1887f'];
+const AP_NOMI_SERIE = { penna: 'penna', evid: 'evidenziatore', testo: 'colore del testo' };
+function apPallini(serie, base) {
+  const m = (LS.get('apPallini', {}) || {})[serie] || {};
+  return base.map((c, i) => m[i] || c);
+}
+function apImpostaPallino(serie, i, c) {
+  const tutti = LS.get('apPallini', {}) || {};
+  const m = Object.assign({}, tutti[serie] || {});
+  if (c) m[i] = c; else delete m[i];
+  if (Object.keys(m).length) tutti[serie] = m; else delete tutti[serie];
+  LS.set('apPallini', tutti);
+}
+/** Tocco lungo (0,5 s, senza muoversi) o clic destro su el → fn(); il clic che segue il tocco lungo non conta (el._lungo). */
+function apTieniPremuto(el, fn) {
+  let t = 0, x0 = 0, y0 = 0, fatto = 0;
+  const via = () => { clearTimeout(t); t = 0; };
+  const scatta = () => { if (Date.now() - fatto < 700) return; fatto = Date.now(); el._lungo = true; setTimeout(() => { el._lungo = false; }, 900); if (navigator.vibrate) try { navigator.vibrate(15); } catch (e) { /* niente */ } fn(); };
+  el.addEventListener('pointerdown', e => { if (e.button > 0) return; x0 = e.clientX; y0 = e.clientY; via(); t = setTimeout(() => { t = 0; scatta(); }, 500); });
+  el.addEventListener('pointermove', e => { if (t && Math.hypot(e.clientX - x0, e.clientY - y0) > 8) via(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(k => el.addEventListener(k, via));
+  el.addEventListener('contextmenu', e => { e.preventDefault(); via(); scatta(); });
+}
+/** Finestra per cambiare il pallino i della serie; fatto(nuovoColore | null) dopo OK o ripristino. */
+function apSceltaPallino(serie, i, attuale, partenza, fatto) {
+  let scelto = attuale;
+  const sf = apFinestra(`<h3>Pallino ${i + 1} · ${esc(AP_NOMI_SERIE[serie] || serie)}</h3>
+    <p class="piccolo">Il colore scelto resta su questo pallino, solo su questo dispositivo. I tratti già scritti non cambiano.</p>
+    <div class="ap-paletta">${AP_PALETTA.map(c => `<button type="button" data-c="${c}" style="--c:${c}" class="${c === attuale ? 'attivo' : ''}" title="${c}"></button>`).join('')}</div>
+    <div class="ap-pal-riga"><label class="ap-pal-altro"><span class="ap-pal-arc"></span>Altro colore…<input type="color" value="${attuale.length === 7 ? attuale : '#ffffff'}"></label>
+      <span class="ap-pal-prima">prima <i style="background:${attuale}"></i> → <i class="ora" style="background:${attuale}"></i></span></div>
+    <div class="ap-bottoni ap-pal-piede"><button type="button" class="link" data-r="1">↺ ripristina i colori di partenza</button>
+      <button type="button" data-v="0">Annulla</button><button type="button" class="primario" data-v="1">OK</button></div>`, 'ap-fin-pallino');
+  const ora = $('.ap-pal-prima .ora', sf);
+  const metti = c => { scelto = c; ora.style.background = c; $$('.ap-paletta button', sf).forEach(b => b.classList.toggle('attivo', b.dataset.c === c)); };
+  $$('.ap-paletta button', sf).forEach(b => b.onclick = () => metti(b.dataset.c));
+  const inp = $('.ap-pal-altro input', sf);
+  inp.oninput = inp.onchange = () => metti(inp.value);
+  const chiudi = () => sf.remove();
+  $('[data-v="0"]', sf).onclick = chiudi;
+  $('[data-v="1"]', sf).onclick = () => { chiudi(); apImpostaPallino(serie, i, scelto.toLowerCase() === String(partenza).toLowerCase() ? null : scelto); fatto(scelto); };
+  $('[data-r]', sf).onclick = () => {
+    chiudi();
+    const tutti = LS.get('apPallini', {}) || {};
+    delete tutti[serie]; LS.set('apPallini', tutti);
+    toast('Colori di partenza: ' + (AP_NOMI_SERIE[serie] || serie));
+    fatto(null);
+  };
+  sf.onclick = e => { if (e.target === sf) chiudi(); };
+}
 const AP_SFONDI = { scuro: { fondo: '#161a20', riga: 'rgba(138,180,248,.13)' }, chiaro: { fondo: '#fbfaf6', riga: 'rgba(26,36,64,.14)' } };
 const AP_PASSO = 32;                      // distanza tra le righe / i quadretti dello sfondo
 const AP_LARGHEZZA = 1000;                // larghezza minima della pagina (punti)
@@ -263,8 +321,11 @@ function apVai(param, sostituisci) {
   if (s) q.set('s', s);
   if (a) q.set('a', a);
   const h = '#/appunti?' + q.toString();
-  if (sostituisci) { location.replace(h); return; }
-  location.hash = h;
+  const vai = () => { if (sostituisci) location.replace(h); else location.hash = h; };
+  // v12.3: se c'è la voce "guardia" del tasto Indietro, prima si toglie (history.back è asincrono), poi si va
+  if (apGuardiaDopo) { apGuardiaDopo = vai; return; }
+  if (apSuGuardia) { apGuardiaDopo = vai; history.back(); return; }
+  vai();
 }
 
 function apDisegnaSezioni() {
@@ -349,10 +410,12 @@ function apDisegnaElenco() {
   $$('.ap-lista li[data-id]', box).forEach(li => {
     const id = li.dataset.id;
     li.onclick = e => {
-      if (e.target.closest('[data-az]')) return;
+      if (e.target.closest('[data-az]') || e.target.closest('.ap-titolo-campo')) return;
       if (li._trascinato) { li._trascinato = false; return; }
+      // v12.3: sull'appunto aperto il tocco sul titolo (o su ✎), col dito o con la penna, apre il campo sul posto
+      if (id === AP.aperto && !cestino && e.target.closest('.ap-titolo, .ap-tit-ma')) { apModificaTitolo(id); return; }
       if (apStretto()) apPannello(false);
-      apVai({ a: id });
+      apVai({ a: id }, !!AP.aperto);   // v12.3: da un appunto all'altro senza voci nuove: Indietro torna all'elenco
     };
     $$('[data-az]', li).forEach(b => b.onclick = e => {
       e.stopPropagation();
@@ -362,6 +425,84 @@ function apDisegnaElenco() {
     if (!cestino) apTrascinabile(li, { tipo: 'appunto', id });
     apMiniatura(id, li.querySelector('.ap-mini'));
   });
+  apScriviConta();
+  // il campo del titolo in modifica sopravvive a un nuovo disegno dell'elenco (sincronizzazione, ricerca…)
+  if (AP.titoloInModifica && $('.ap-lista li[data-id="' + CSS.escape(AP.titoloInModifica.id) + '"]', box)) apModificaTitolo(AP.titoloInModifica.id, AP.titoloInModifica);
+  else AP.titoloInModifica = null;
+}
+
+// ───────────────────────── v12.3: titolo solo nell'elenco ─────────────────────────
+// SPEC v12.3 §2. Il titolo non è più sulla pagina: si vede e si cambia nella scheda dell'elenco. Sull'appunto aperto:
+// tocco sul titolo o su ✎ = campo sul posto (Invio o tocco fuori = salva, Esc = annulla); "N schermi · N titoletti" nella
+// riga piccola. Appunto nuovo: se l'elenco si vede, il campo si apre già pronto (titolo automatico selezionato).
+
+/** Apre il campo del titolo nella scheda dell'appunto id ("da": bozza da riprendere dopo un nuovo disegno). */
+function apModificaTitolo(id, da) {
+  const li = $('.ap-lista li[data-id="' + CSS.escape(id) + '"]');
+  const tEl = li && li.querySelector('.ap-titolo');
+  if (!tEl) return;
+  const r = apRiga(id) || {};
+  const orig = da ? da.orig : (r.Titolo || '');
+  const inp = document.createElement('textarea');
+  inp.className = 'ap-titolo-campo';
+  inp.rows = 2;
+  inp.value = da ? da.bozza : orig;
+  inp.setAttribute('aria-label', 'Titolo dell\'appunto');
+  tEl.replaceWith(inp);
+  li.classList.add('in-modifica');
+  AP.titoloInModifica = { id, orig, bozza: inp.value };
+  let chiuso = false;
+  const chiudi = salva => {
+    if (chiuso) return;
+    chiuso = true;
+    AP.titoloInModifica = null;
+    const v = inp.value.replace(/\s+/g, ' ').trim();
+    if (salva && v !== orig) apSalvaRiga(id, { 'Titolo': v || 'Senza titolo' }, true);
+    li.classList.remove('in-modifica');
+    const nuovo = document.createElement('div');
+    nuovo.className = 'ap-titolo';
+    nuovo.innerHTML = apTitoloHtml(apRiga(id) || r, id === AP.aperto);
+    if (inp.isConnected) inp.replaceWith(nuovo);
+  };
+  inp.oninput = () => { AP.titoloInModifica && (AP.titoloInModifica.bozza = inp.value); };
+  inp.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); chiudi(true); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); chiudi(false); }
+  };
+  inp.onblur = () => setTimeout(() => chiudi(true), 0);
+  ['pointerdown', 'click'].forEach(t => inp.addEventListener(t, e => e.stopPropagation()));
+  setTimeout(() => { inp.focus(); if (da) inp.setSelectionRange(inp.value.length, inp.value.length); else inp.select(); }, 30);
+}
+/** Testo del titolo nella scheda: 📌, titolo e (solo sull'appunto aperto) ✎. */
+function apTitoloHtml(r, aperto) {
+  return (r.Fissato === true ? '📌 ' : '') + esc(r.Titolo || 'Senza titolo') + (aperto && !r['Eliminato il'] ? '<span class="ap-tit-ma" title="Cambia il titolo">✎</span>' : '');
+}
+/** "N schermi · N titoletti" nella riga piccola della scheda dell'appunto aperto. */
+function apScriviConta() {
+  const el = AP.aperto && $('.ap-lista li[data-id="' + CSS.escape(AP.aperto) + '"] .ap-conta-pag');
+  if (!el || !AP.ed || !AP.ed.conta) return;
+  const c = AP.ed.conta();
+  if (!c) return;
+  el.textContent = ' · ' + c.schermi + (c.schermi === 1 ? ' schermo' : ' schermi') + (c.titoletti ? ' · ' + c.titoletti + (c.titoletti === 1 ? ' titoletto' : ' titoletti') : '');
+}
+/** Scheda dell'appunto aperto: bordo, ✎ e conteggio solo lì (senza ridisegnare l'elenco). */
+function apSegnaAperto() {
+  $$('.ap-lista li[data-id]').forEach(li => {
+    const id = li.dataset.id, si = id === AP.aperto;
+    li.classList.toggle('aperto', si);
+    const t = li.querySelector('.ap-titolo'), r = apRiga(id);
+    if (t && r && !(AP.titoloInModifica && AP.titoloInModifica.id === id)) t.innerHTML = apTitoloHtml(r, si && AP.sel !== 'cestino');
+    const sotto = li.querySelector('.sotto'), c = li.querySelector('.ap-conta-pag');
+    if (si && sotto && !c) sotto.insertAdjacentHTML('beforeend', '<span class="ap-conta-pag"></span>');
+    if (!si && c) c.remove();
+  });
+  apScriviConta();
+}
+/** L'elenco si vede accanto alla pagina (finestra larga con Sezioni acceso, o pannello aperto)? */
+function apElencoVisibile() {
+  const g = $('.ap-guscio');
+  if (!g || document.body.classList.contains('ap-tutto')) return false;
+  return apStretto() ? g.classList.contains('ap-pannello-su') : !g.classList.contains('ap-larga');
 }
 
 function apVoceElenco(r, cestino) {
@@ -371,8 +512,8 @@ function apVoceElenco(r, cestino) {
   return `<li data-id="${esc(r.ID)}" class="${r.ID === AP.aperto ? 'aperto' : ''}">
     <div class="ap-mini"></div>
     <div class="corpo">
-      <div class="ap-titolo">${r.Fissato === true ? '📌 ' : ''}${esc(r.Titolo || 'Senza titolo')}</div>
-      <div class="sotto">${sez}${esc(apData(quando))}${cestino ? ' · nel cestino dal ' + esc(apData(r['Eliminato il'])) : ''}</div>
+      <div class="ap-titolo">${apTitoloHtml(r, r.ID === AP.aperto && !cestino)}</div>
+      <div class="sotto">${sez}${esc(apData(quando))}${cestino ? ' · nel cestino dal ' + esc(apData(r['Eliminato il'])) : ''}${r.ID === AP.aperto ? '<span class="ap-conta-pag"></span>' : ''}</div>
       ${d ? `<span class="ap-dafare">☐ ${d} da fare</span>` : ''}
       ${r['Proposta Claude'] ? '<span class="ap-proposta-chip">✳ proposta</span>' : ''}
     </div>
@@ -463,6 +604,7 @@ function apDestinazioni() {
 function apMenuAppunto(id, vicino) {
   const r = apRiga(id) || {};
   apMenu(vicino, [
+    ['✎ Rinomina', () => apChiedi('Titolo dell\'appunto', r.Titolo || '').then(v => { if (v != null && v.trim() && v.trim() !== r.Titolo) { apSalvaRiga(id, { 'Titolo': v.replace(/\s+/g, ' ').trim() }, true); apAggiornaTutto(); } })],
     ['Sposta in…', () => apScegli('Sposta «' + (r.Titolo || 'appunto') + '» in…', apDestinazioni()).then(v => { if (v) { const p = v.split('|'); apSposta(id, p[0], p[1]); } })],
     [r.Fissato === true ? 'Togli 📌' : '📌 Fissa in cima', () => { apSalvaRiga(id, { 'Fissato': r.Fissato !== true }, true); apAggiornaTutto(); }],
     [r.Archiviato === true ? 'Togli dall\'archivio' : '🗄 Archivia', () => { apSalvaRiga(id, { 'Archiviato': r.Archiviato !== true }, true); apAggiornaTutto(); }],
@@ -723,12 +865,13 @@ function apChiudiEditor() {
   AP.ed = null; AP.aperto = null;
   document.body.classList.remove('ap-tutto');
   apPaginaVuota();
+  apSegnaAperto();
 }
 
 function apApri(id) {
   if (AP.ed) { AP.ed.salvaSubito(); AP.ed.distruggi(); AP.ed = null; }
   AP.aperto = id;
-  $$('.ap-lista li').forEach(li => li.classList.toggle('aperto', li.dataset.id === id));
+  apSegnaAperto();
   const box = $('#ap-pagina');
   box.innerHTML = '<div class="ap-vuota"><p>Apro…</p></div>';
   apLeggi(id).then(rec => {
@@ -771,7 +914,6 @@ function apMontaEditor(box, id, rec) {
         </span>
         <button type="button" class="ap-icona ap-solo-telefono" id="ap-strumenti" title="Strumenti per scrivere">✎</button>
       </div>
-      <input id="ap-titolo" class="ap-titolo-in" value="${esc(r.Titolo || '')}" placeholder="Titolo" ${sola ? 'disabled' : ''}>
     </div>
     <div id="ap-proposta"></div>
     <div class="ap-editor" id="ap-editor"></div>
@@ -787,9 +929,9 @@ function apMontaEditor(box, id, rec) {
   ed.id = id;
   ed.rec = rec;
   AP.ed = ed;
-  const tit = $('#ap-titolo', box);
-  tit.oninput = () => { apSalvaRiga(id, { 'Titolo': tit.value.trim() || 'Senza titolo' }); const li = $('.ap-lista li[data-id="' + id + '"] .ap-titolo'); if (li) li.textContent = (apRiga(id).Fissato === true ? '📌 ' : '') + (tit.value || 'Senza titolo'); };
-  if (AP.nuovoTitolo === id) { AP.nuovoTitolo = null; setTimeout(() => { tit.focus(); tit.select(); }, 60); }
+  // v12.3: il titolo sta solo nell'elenco; appunto nuovo con l'elenco visibile = campo del titolo già aperto
+  ed.suConta = () => apScriviConta();
+  if (AP.nuovoTitolo === id) { AP.nuovoTitolo = null; if (apElencoVisibile()) setTimeout(() => apModificaTitolo(id), 80); }
   $('#ap-fissa', box).onclick = () => { const x = apRiga(id); apSalvaRiga(id, { 'Fissato': !(x && x.Fissato === true) }, true); apAggiornaTutto(); };
   $('#ap-piu', box).onclick = e => apMenuAppunto(id, e.currentTarget);
   // v12.1: Sezioni acceso = colonne a sinistra visibili (il contrario del vecchio ⤢ "a tutta larghezza"); si ricorda come prima
@@ -873,9 +1015,10 @@ function apColSalva(q, v) {
 function apManiglia(el, q) {
   let ultimoTocco = 0;
   const fumo = el.querySelector('.ap-man-fumo');
-  el.addEventListener('pointerdown', ev => {
+  const avvia = ev => {
     if (ev.pointerType === 'pen') return;
     ev.preventDefault(); ev.stopPropagation();
+    apBloccaClic();
     if (ev.timeStamp - ultimoTocco < 350) {   // doppio tocco
       ultimoTocco = 0; apColSalva(q, null); apColonne();
       toast(AP_NOMI_COL[q][0].toUpperCase() + AP_NOMI_COL[q].slice(1) + ': larghezza iniziale');
@@ -901,7 +1044,42 @@ function apManiglia(el, q) {
       if (mosso) { ultimoTocco = 0; if (raf) { cancelAnimationFrame(raf); raf = 0; const L = Object.assign({}, L0); L[q] = L0[q] + ultimo; apColonne(L, q); } apColSalva(q, AP.col[q]); }
     };
     el.addEventListener('pointermove', muovi); el.addEventListener('pointerup', fine); el.addEventListener('pointercancel', fine);
+  };
+  el._avvia = avvia;
+  el.addEventListener('pointerdown', avvia);
+}
+// v12.3: col dito vero la WebView sposta il tocco sull'elemento "cliccabile" più vicino (touch adjustment): con una scheda
+// dell'elenco alla stessa altezza, il tocco sulla maniglia arrivava alla scheda (visto sul tablet: punto sotto il dito =
+// maniglia, bersaglio = scheda). Quindi la maniglia si riconosce dal punto toccato, chiunque riceva il tocco: entro 16 px
+// dalla sua linea (zona da 32 px), se sopra non c'è una finestra o un menu.
+function apManigliaVicina(x, y) {
+  let meglio = null, dist = 17;
+  document.querySelectorAll('.ap-man').forEach(m => {
+    if (!m._avvia) return;
+    const r = m.getBoundingClientRect();
+    if (!r.width || y < r.top || y > r.bottom) return;
+    const d = Math.abs(x - (r.left + r.width / 2));
+    if (d < dist) { dist = d; meglio = m; }
   });
+  return meglio;
+}
+document.addEventListener('pointerdown', ev => {
+  if (ev.pointerType === 'pen' || ev.button > 0 || !document.body.classList.contains('pagina-appunti')) return;
+  if (ev.target.closest && ev.target.closest('.ap-man')) return;   // la maniglia lo riceve già da sola
+  const m = apManigliaVicina(ev.clientX, ev.clientY);
+  if (!m) return;
+  const sotto = document.elementFromPoint(ev.clientX, ev.clientY);
+  if (sotto && sotto.closest('.ap-velo, .ap-menu, .ap-fantasma, .ap-velo-pann')) return;
+  m._avvia(ev);
+}, true);
+/** Dopo un trascinamento della maniglia il "clic" del dito non deve aprire la scheda o la sezione sotto. */
+function apBloccaClic() {
+  const blocca = e => { e.stopPropagation(); e.preventDefault(); };
+  document.addEventListener('click', blocca, true);
+  const via = () => { document.removeEventListener('click', blocca, true); document.removeEventListener('pointerup', poi, true); };
+  const poi = () => setTimeout(via, 400);
+  document.addEventListener('pointerup', poi, true);
+  setTimeout(via, 10000);
 }
 /** Finestra stretta: apre/chiude il pannello di sezioni + elenco (non si chiude se non c'è un appunto aperto). */
 function apPannello(si) {
@@ -925,7 +1103,12 @@ function apSistemaPannello(aperto, nuovo) {
 // Girando il tablet (o allargando la finestra): larghezze dell'orientamento giusto; passando da larga a stretta (o
 // viceversa) il pannello si chiude e l'indice segue la regola del modo nuovo. L'appunto aperto non si tocca.
 let apModoStretto = apStretto();
-function apFinestra() {
+// v12.3: si chiamava apFinestra come la funzione delle piccole finestre (riga ~664): questa, dichiarata dopo, la
+// sostituiva, e Sfondo / Rinomina / Conferma andavano in errore agganciando un onclick rotto a tutti i pulsanti.
+function apMisuraFinestra() {
+  try { apMisuraFinestraOra(); } catch (e) { apRipristinaVista(e); }
+}
+function apMisuraFinestraOra() {
   // solo con la pagina Appunti montata (il ResizeObserver scatta anche al caricamento, prima di app.js); il guscio
   // nuovo si sistema da solo in vistaAppunti
   if (typeof LS === 'undefined' || !document.querySelector('.ap-guscio')) return;
@@ -933,17 +1116,128 @@ function apFinestra() {
   if (st !== apModoStretto) {
     const g = $('.ap-guscio');
     if (g) g.classList.remove('ap-pannello-su');
+    if (g && !st) g.classList.toggle('ap-larga', !!LS.get('apLarga', false));   // v12.3: tornando larga, la scelta di Sezioni
     if (AP.ed && AP.ed.cambioModo) AP.ed.cambioModo();
   }
   apModoStretto = st;
   apColonne();
   if ($('.ap-guscio')) apSistemaPannello(AP.aperto, false);
+  apStrisciaDentro();
+  // dopo una rotazione (la misura si assesta in più passi) controlla che la pagina si veda davvero
+  clearTimeout(apControlloT);
+  apControlloT = setTimeout(apControllaVista, 400);
 }
+let apControlloT = 0;
 let apFinestraRaf = 0;
-const apFinestraPoi = () => { cancelAnimationFrame(apFinestraRaf); apFinestraRaf = requestAnimationFrame(apFinestra); };
+const apFinestraPoi = () => { cancelAnimationFrame(apFinestraRaf); apFinestraRaf = requestAnimationFrame(apMisuraFinestra); };
 window.addEventListener('resize', apFinestraPoi);
 // l'evento resize può arrivare a metà rotazione, con la misura vecchia: la pagina che cambia misura lo ridice sempre
 if (window.ResizeObserver) new ResizeObserver(apFinestraPoi).observe(document.documentElement);
+
+// ───────────────────────── v12.3: rete di sicurezza dopo una rotazione ─────────────────────────
+// Causa dello schermo nero (17/11): la striscia del tutto schermo (✎ ▤ ☰ ⛶) ha la posizione salvata in pixel; spostata
+// a destra in orizzontale (x > ~470), girando il tablet in verticale (686 px) restava fuori dallo schermo: si vedeva solo
+// la pagina scura, senza pulsanti. Ora la striscia si riporta sempre dentro e, se la pagina non si vede, si torna a una
+// vista normale.
+
+/** Riporta la striscia del tutto schermo dentro la pagina (la posizione salvata non cambia: rigirando torna lì). */
+function apStrisciaDentro() {
+  const st = $('#ap-striscia');
+  if (!st || !document.body.classList.contains('ap-tutto') || !st.style.left) return;
+  const p = st.parentElement, W = (p && p.clientWidth) || innerWidth, H = (p && p.clientHeight) || innerHeight;
+  const x = parseFloat(st.style.left) || 0, y = parseFloat(st.style.top) || 0;
+  const nx = Math.max(4, Math.min(W - st.offsetWidth - 4, x)), ny = Math.max(4, Math.min(H - st.offsetHeight - 4, y));
+  if (nx !== x) st.style.left = nx + 'px';
+  if (ny !== y) st.style.top = ny + 'px';
+}
+
+/** Dopo un cambio di misura: la pagina ha la misura giusta e, a tutto schermo, la striscia si vede. Se no, vista normale. */
+function apControllaVista() {
+  if (!document.body.classList.contains('pagina-appunti') || !AP.ed) return;
+  try {
+    if (AP.ed.misura) {
+      const m = AP.ed.misura();
+      // v12.3: pagina larga o alta 0 (colonna schiacciata) = schermo nero
+      if (!document.hidden && $('#ap-editor') && (!m.vw || !m.vh)) throw new Error('pagina larga 0');
+      if (m.vw && (m.W !== m.vw || m.H !== m.vh)) AP.ed.dimensiona();
+      if (m.vw && !AP.ed.misura().W) throw new Error('pagina senza misura');
+    }
+    if (document.body.classList.contains('ap-tutto')) {
+      apStrisciaDentro();
+      const st = $('#ap-striscia'), r = st && st.getBoundingClientRect();
+      if (!r || !r.width || r.right < 20 || r.bottom < 20 || r.left > innerWidth - 20 || r.top > innerHeight - 20) throw new Error('striscia fuori dallo schermo');
+    }
+  } catch (e) { apRipristinaVista(e); }
+}
+
+/** Ultima risorsa: chiude ogni pannello e finestra, esce dal tutto schermo. Mai uno schermo senza uscita. */
+function apRipristinaVista(err) {
+  if (window.console) console.warn('Appunti: vista ripristinata', err);
+  try {
+    $$('.ap-velo').forEach(v => { if (!v.classList.contains('ap-velo-rapido')) v.remove(); });
+    document.body.classList.remove('ap-cassetto');
+    const g = $('.ap-guscio');
+    if (g && !g.classList.contains('ap-fisso')) g.classList.remove('ap-pannello-su');
+    if (g && apStretto()) g.classList.remove('ap-larga');   // "Sezioni spento" non serve nella finestra stretta
+    if (AP.ed && AP.ed.indiceAperto && apStretto()) AP.ed.impostaIndice(false);
+    if (document.body.classList.contains('ap-tutto')) apTutto(false);
+    if (AP.ed && AP.ed.dimensiona) AP.ed.dimensiona();
+    apStatoVista();
+  } catch (e) { document.body.classList.remove('ap-tutto', 'ap-cassetto'); }
+  if (typeof toast === 'function') toast('Vista dell\'appunto ripristinata');
+}
+
+// ───────────────────────── v12.3: tasto Indietro (Android e browser) ─────────────────────────
+// L'app del tablet fa goBack() della WebView. Con un pannello o una finestrella aperti si mette nella cronologia una voce
+// "guardia" (stesso indirizzo, stato apG): Indietro toglie la guardia e chiude quello che è aperto, senza cambiare pagina.
+// Senza niente aperto Indietro esce dall'appunto (torna all'elenco: passare da un appunto all'altro non crea voci).
+
+/** Qualcosa che Indietro deve chiudere prima di uscire dall'appunto. */
+function apQualcosaAperto() {
+  if (document.querySelector('.ap-velo')) return true;
+  if (document.body.classList.contains('ap-cassetto')) return true;
+  const g = $('.ap-guscio');
+  if (g && apStretto() && g.classList.contains('ap-pannello-su') && !g.classList.contains('ap-fisso')) return true;
+  return !!(AP.ed && AP.ed.indiceAperto && apStretto());
+}
+/** Chiude la cosa aperta più in alto; false se non c'era niente. */
+function apChiudiUno() {
+  const veli = $$('.ap-velo');
+  const v = veli[veli.length - 1];
+  if (v) {
+    const ann = v.classList.contains('ap-velo-rapido') && $('#ap-r-annulla', v);
+    if (ann) ann.click();          // appunto rapido: come Annulla (chiede se c'è scritto qualcosa)
+    else v.click();                // tocco sul velo = chiude (scelta / conferma / menu: "annulla")
+    if (!ann && v.isConnected) v.remove();
+    return true;
+  }
+  if (AP.ed && AP.ed.indiceAperto && apStretto()) { AP.ed.impostaIndice(false); return true; }
+  if (document.body.classList.contains('ap-cassetto')) { document.body.classList.remove('ap-cassetto'); apColonne(); apStatoVista(); return true; }
+  const g = $('.ap-guscio');
+  if (g && apStretto() && g.classList.contains('ap-pannello-su') && !g.classList.contains('ap-fisso')) { apPannello(false); return true; }
+  return false;
+}
+let apSuGuardia = !!(history.state && history.state.apG);
+let apGuardiaDopo = null;   // cosa fare quando la guardia è stata tolta (history.back è asincrono)
+function apGuardia() {
+  if (apGuardiaDopo) return;
+  const serve = document.body.classList.contains('pagina-appunti') && apQualcosaAperto();
+  if (serve && !apSuGuardia) { history.pushState({ apG: 1 }, '', location.href); apSuGuardia = true; }
+  else if (!serve && apSuGuardia) { apGuardiaDopo = () => {}; history.back(); }
+}
+let apGuardiaRaf = 0;
+function apGuardiaPoi() { cancelAnimationFrame(apGuardiaRaf); apGuardiaRaf = requestAnimationFrame(apGuardia); }
+window.addEventListener('popstate', () => {
+  const era = apSuGuardia;
+  apSuGuardia = !!(history.state && history.state.apG);
+  if (apGuardiaDopo) { const f = apGuardiaDopo; apGuardiaDopo = null; f(); apGuardiaPoi(); return; }
+  if (era && !apSuGuardia) {   // Indietro con qualcosa aperto
+    if (!apChiudiUno()) history.back();
+    apGuardiaPoi();
+  }
+});
+// le piccole finestre e i menu si aggiungono e si tolgono dal body
+new MutationObserver(apGuardiaPoi).observe(document.body || document.documentElement, { childList: true });
 
 // ───────────────────────── v11.1: tutto schermo ─────────────────────────
 
@@ -957,6 +1251,7 @@ function apTutto(si) {
   const e = $('#ap-editor');
   if (e) e.classList.remove('barra-su');
   apStatoVista();
+  if (si) requestAnimationFrame(apStrisciaDentro);   // v12.3: mai fuori dallo schermo
 }
 
 /**
@@ -977,6 +1272,7 @@ function apStatoVista() {
     const b = $('#ap-editor > .ed-barra');
     st.style.marginTop = barra && b && st.offsetTop < b.offsetHeight + 6 ? (b.offsetHeight + 6) + 'px' : '';
   }
+  apGuardiaPoi();
 }
 
 function apMontaTutto(box, sola) {
@@ -1050,8 +1346,6 @@ function apTestaEditor(id) {
   ss.onchange = () => apSposta(id, ss.value, '');
   so.onchange = () => apSposta(id, ss.value, so.value);
   $('#ap-fissa').classList.toggle('attivo', r.Fissato === true);
-  const tit = $('#ap-titolo');
-  if (tit && document.activeElement !== tit && r.Titolo != null && tit.value !== r.Titolo) tit.value = r.Titolo;
   apMostraProposta(id);
   apStatoSalvato();
 }
@@ -1639,7 +1933,7 @@ function rendiMiniatura(pagina) {
 // come la vista. Vista = { x, y } (angolo in alto a sinistra in punti pagina) e z (zoom).
 
 const ED_STRUMENTI = [
-  ['penna', '✒', 'penna'], ['evid', '🖍', 'evidenziatore'], ['testo', 'T', 'testo'], ['lazo', '➰', 'lazo'],
+  ['penna', '✒', 'penna'], ['evid', '🖍', 'evidenziatore', 'evidenz.'], ['testo', 'T', 'testo'], ['lazo', '➰', 'lazo'],
   ['gomma', '⌫', 'gomma'], ['gommaArea', '▭', 'g. area'],
 ];
 
@@ -1651,7 +1945,7 @@ function creaEditor(box, pagina, opz) {
   box.innerHTML = `
     <div class="ed-barra" ${opz.soloLettura ? 'hidden' : ''}>
       <div class="ed-gruppo ed-strumenti">${ED_STRUMENTI.filter(s => !rapido || ['penna', 'evid', 'gomma'].indexOf(s[0]) >= 0)
-        .map(s => `<button type="button" data-str="${s[0]}" title="${s[2]}"><span>${s[1]}</span><small>${s[2]}</small></button>`).join('')}</div>
+        .map(s => `<button type="button" data-str="${s[0]}" title="${s[2]}"><span>${s[1]}</span><small>${s[3] || s[2]}</small></button>`).join('')}</div>
       <div class="ed-gruppo ed-colori"></div>
       <label class="ed-spessore"><small>spessore · <b id="ed-sp-val"></b></small><input type="range" id="ed-sp" min="1" max="40" step="1"></label>
       <div class="ed-gruppo">
@@ -1934,6 +2228,9 @@ function creaEditor(box, pagina, opz) {
     const sch = H / z;
     const tot = maxScorri(L) + sch;
     const nSch = Math.max(1, Math.ceil(tot / sch - 0.05));
+    // v12.3: schermi pieni di contenuto e titoletti, per la scheda dell'elenco (si avvisa solo quando cambiano)
+    const nPieni = Math.max(1, Math.ceil(L.h / sch - 0.05)), nTit = rapido ? 0 : titoletti().length, cc = ed._conta || {};
+    if (!rapido && (cc.schermi !== nPieni || cc.titoletti !== nTit)) { ed._conta = { schermi: nPieni, titoletti: nTit }; if (ed.suConta) ed.suConta(); }
     info.textContent = (ed.caricando ? 'apro… · ' : '') + (nSch > 1 && !rapido ? 'schermo ' + Math.min(nSch, Math.floor(ed.v.y / sch + 0.5) + 1) + ' di ' + nSch + ' · ' : '') + Math.round(z * 100) + ' %';
     // barra a destra: posizione nella pagina (trascinabile) e tacche dei titoletti
     const hb = Math.max(4, sch / tot * 100);
@@ -2261,13 +2558,15 @@ function creaEditor(box, pagina, opz) {
   let ultimoTesto = null;
   $('#ed-fs', box).addEventListener('pointerdown', () => { ultimoTesto = testoAttivo(); });
   function coloriTesto() {
-    const pal = colorePenne();
+    const base = colorePenne(), pal = apPallini('testo', base);
     const box2 = $('.ed-colori-testo', box);
-    box2.innerHTML = pal.map(c => `<button type="button" class="ed-col" data-c="${c}" style="--c:${c}" title="Colore del testo"></button>`).join('');
+    box2.innerHTML = pal.map((c, i) => `<button type="button" class="ed-col ${c !== base[i] ? 'mod' : ''}" data-c="${c}" data-i="${i}" style="--c:${c}" title="Colore del testo (tocco lungo: cambia questo colore)"></button>`).join('');
     $$('button', box2).forEach(b => {
+      const i = Number(b.dataset.i);
       b.addEventListener('pointerdown', ev => ev.preventDefault());
       b.addEventListener('mousedown', ev => ev.preventDefault());
-      b.onclick = () => { const t = testoAttivo(); if (!t) return; document.execCommand('foreColor', false, b.dataset.c); t.e.html = htmlPulito(t.d); cambiato(); };
+      b.onclick = () => { if (b._lungo) { b._lungo = false; return; } const t = testoAttivo(); if (!t) return; document.execCommand('foreColor', false, b.dataset.c); t.e.html = htmlPulito(t.d); cambiato(); };
+      apTieniPremuto(b, () => apSceltaPallino('testo', i, b.dataset.c, base[i], () => coloriTesto()));
     });
   }
 
@@ -2668,14 +2967,22 @@ function creaEditor(box, pagina, opz) {
   // ── barra degli strumenti ──
   function colorePenne() { return ed.pagina && ed.pagina.sfondo && ed.pagina.sfondo.colore === 'chiaro' ? AP_PENNE_CHIARO : AP_PENNE_SCURO; }
   function colori() {
-    const pal = colorePenne();
+    const base = colorePenne(), pal = apPallini('penna', base);
     if (pref.colore && pal.indexOf(pref.colore) < 0 && (AP_PENNE_SCURO.indexOf(pref.colore) >= 0 || AP_PENNE_CHIARO.indexOf(pref.colore) >= 0)) pref.colore = pal[0];
     const ev = ed.strumento === 'evid';
-    const scelti = ev ? ['#fdd663', '#81c995', '#8ab4f8', '#f28b82', '#c58af9'] : pal;
+    // v12.3 (SPEC §4): pallini personalizzabili, uno per uno, su questo dispositivo (tocco lungo o clic destro)
+    const serie = ev ? 'evid' : 'penna', partenza = ev ? AP_EVID : base;
+    const scelti = ev ? apPallini('evid', AP_EVID) : pal;
     const att = ev ? pref.evColore : (pref.colore || pal[0]);
-    $('.ed-colori', box).innerHTML = scelti.map(c => `<button type="button" class="ed-col ${c === att ? 'attivo' : ''}" data-c="${c}" style="--c:${c}"></button>`).join('') +
+    $('.ed-colori', box).innerHTML = scelti.map((c, i) => `<button type="button" class="ed-col ${c === att ? 'attivo' : ''} ${c !== partenza[i] ? 'mod' : ''}" data-c="${c}" data-i="${i}" style="--c:${c}" title="Tocco lungo: cambia questo colore"></button>`).join('') +
       (rapido ? '' : `<label class="ed-col ed-libero ${scelti.indexOf(att) < 0 ? 'attivo' : ''}" title="Colore libero" style="--c:${att}"><input type="color" value="${att.length === 7 ? att : '#ffffff'}"></label>`);
-    $$('.ed-colori button', box).forEach(b => b.onclick = () => impostaColore(b.dataset.c));
+    $$('.ed-colori button', box).forEach(b => {
+      const i = Number(b.dataset.i);
+      b.onclick = () => { if (b._lungo) { b._lungo = false; return; } impostaColore(b.dataset.c); };
+      apTieniPremuto(b, () => apSceltaPallino(serie, i, b.dataset.c, partenza[i], nuovo => {
+        if (nuovo && b.classList.contains('attivo')) impostaColore(nuovo); else colori();
+      }));
+    });
     const lib = $('.ed-colori input', box);
     if (lib) lib.onchange = () => impostaColore(lib.value);
     const sp = $('#ed-sp', box);
@@ -2723,6 +3030,14 @@ function creaEditor(box, pagina, opz) {
     });
   }
   $$('.ed-barra [data-str]', box).forEach(b => b.onclick = () => scegliStrumento(b.dataset.str));
+  // v12.3: se la riga non ci sta (orizzontale con Sezioni aperto) scorre di lato; sfumatura e › finché c'è altro a destra
+  const barraUna = $('.ed-barra', box);
+  if (barraUna) {
+    const segnaScorre = () => barraUna.classList.toggle('scorre', barraUna.scrollLeft + barraUna.clientWidth < barraUna.scrollWidth - 2);
+    barraUna.addEventListener('scroll', segnaScorre, { passive: true });
+    if (window.ResizeObserver) new ResizeObserver(segnaScorre).observe(barraUna);
+    setTimeout(segnaScorre, 0);
+  }
   $$('.ed-barra [data-az]', box).forEach(b => b.onclick = () => {
     const a = b.dataset.az;
     if (a === 'annulla') annulla();
@@ -2751,9 +3066,14 @@ function creaEditor(box, pagina, opz) {
     }).catch(() => toast('Foto non leggibile'));
   };
 
-  ed.distruggi = () => { clearTimeout(salvataggioT); if (ro) ro.disconnect(); window.removeEventListener('resize', dimensiona); };
+  ed.distruggi = () => { clearTimeout(salvataggioT); if (ro) ro.disconnect(); window.removeEventListener('resize', dimensionaSicuro); };
   let ro = null;
-  if (window.ResizeObserver) { ro = new ResizeObserver(dimensiona); ro.observe(vista); } else window.addEventListener('resize', dimensiona);
+  // v12.3: per la rete di sicurezza dopo una rotazione
+  ed.dimensiona = dimensiona;
+  ed.misura = () => ({ W, H, vw: vista.clientWidth, vh: vista.clientHeight });
+  ed.conta = () => ed._conta || null;   // v12.3: { schermi, titoletti } per la scheda dell'elenco
+  const dimensionaSicuro = () => { try { dimensiona(); } catch (e) { if (!rapido && typeof apRipristinaVista === 'function') apRipristinaVista(e); else throw e; } };
+  if (window.ResizeObserver) { ro = new ResizeObserver(dimensionaSicuro); ro.observe(vista); } else window.addEventListener('resize', dimensionaSicuro);
   carica(pagina);
   aggiornaBottoneIndice();
   scegliStrumento(opz.soloLettura ? 'lazo' : 'penna');

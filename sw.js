@@ -8,7 +8,7 @@
 // v12: Appunti a pagina lunga divisa in fogli (titoletti, indice, barra trascinabile).
 // v12.2: l'Indice spento nasconde davvero la colonna dei titoletti (app.css .ed-indice[hidden]); tablet in verticale
 // con i pannelli di Sezioni e Indice sopra la pagina; colonne e indice ridimensionabili con le maniglie.
-const CACHE = 'assistente-v12.2';
+const CACHE = 'assistente-v12.3';
 const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // pagine che hanno risposto "gestisco" (si ricaricano da sole, in modo sicuro)

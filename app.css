@@ -26,15 +26,17 @@ h2 { font-size: 20px; margin: 24px 0 10px; color: var(--testo-2); font-weight: 6
 .num { font-variant-numeric: tabular-nums; }
 
 /* Barra in alto */
-.barra { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+.barra { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 4px 16px; min-height: 40px;
   background: rgba(17, 20, 24, .96); border-bottom: 1px solid var(--bordo); }
-.titolo { color: var(--testo); font-weight: 700; font-size: 20px; white-space: nowrap; }
+.titolo { color: var(--testo); font-weight: 700; font-size: 18px; white-space: nowrap; }
 .sezioni { display: flex; gap: 4px; overflow-x: auto; flex: 1; scrollbar-width: none; }
 .sezioni::-webkit-scrollbar { display: none; }
 .sezioni a { color: var(--testo-2); padding: 8px 12px; border-radius: 999px; white-space: nowrap; font-size: 16px; }
 .sezioni a.attiva { background: var(--superficie-2); color: var(--testo); }
-.stato-sync { background: none; border: 1px solid var(--bordo); color: var(--testo-2); border-radius: 999px; padding: 6px 12px;
-  font-size: 14px; white-space: nowrap; }
+/* v12.3: testata più bassa (striscia di ~40 px): pulsante alto 30 px invece di 48; mai più stretto della scritta più lunga
+   ("Sincronizzo…", "Aggiornato 23:46", "Offline · 23:03"), così non si taglia mentre si aggiorna */
+.stato-sync { background: none; border: 1px solid var(--bordo); color: var(--testo-2); border-radius: 999px; padding: 2px 14px;
+  min-height: 30px; min-width: 9.6em; flex: none; font-size: 14px; line-height: 1.2; white-space: nowrap; overflow: visible; }
 .stato-sync.errore { color: var(--rosso); border-color: var(--rosso); }
 .stato-sync.coda { color: var(--giallo); border-color: var(--giallo); }
 body.incorporata .barra .sezioni { display: none; }
@@ -342,7 +344,7 @@ body.pagina-appunti main { max-width: none; padding: 0; }
 body.pagina-appunti .penna { display: none; }
 /* v12.2: larghezze di sezioni, elenco e indice scritte da appunti.js (apColonne: maniglie, ricordate per orientamento) */
 :root { --ap-ws: 270px; --ap-we: 300px; --ap-wi: 260px; }
-.ap-guscio { display: grid; grid-template-columns: var(--ap-ws) var(--ap-we) minmax(0, 1fr); height: calc(100vh - 57px - 62px); height: calc(100dvh - 57px - 62px); min-height: 420px; }
+.ap-guscio { display: grid; grid-template-columns: var(--ap-ws) var(--ap-we) minmax(0, 1fr); height: calc(100vh - 41px - 50px); height: calc(100dvh - 41px - 50px); min-height: 420px; }
 .ap-col { min-width: 0; overflow: auto; border-right: 1px solid var(--bordo); }
 .ap-sez { padding: 12px 12px 20px; display: flex; flex-direction: column; gap: 6px; }
 .ap-testa-sez { display: flex; align-items: center; justify-content: space-between; }
@@ -384,7 +386,15 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ap-lista li.aperto { border-color: var(--accento); background: #1d2533; }
 .ap-mini { width: 64px; height: 50px; flex: none; border-radius: 6px; background: #161a20 center/cover no-repeat; border: 1px solid var(--bordo); }
 .ap-lista .corpo { flex: 1; min-width: 0; }
-.ap-titolo { font-weight: 600; font-size: 15.5px; line-height: 1.25; overflow-wrap: anywhere; }
+.ap-titolo { font-weight: 600; font-size: 15.5px; line-height: 1.25; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }   /* v12.3: 2 righe, poi "…" */
+/* v12.3 (SPEC §2): titolo modificabile sul posto nella scheda dell'appunto aperto */
+.ap-tit-ma { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 13px; line-height: 20px; vertical-align: 1px;
+  color: var(--accento); background: rgba(138, 180, 248, .14); cursor: text; }
+.ap-lista li.aperto .ap-titolo { cursor: text; }
+.ap-titolo-campo { display: block; width: 100%; min-height: 0; resize: none; overflow: hidden; font: inherit; font-weight: 600; font-size: 15.5px; line-height: 1.25;
+  color: var(--testo); background: #0f141b; border: 1.5px solid var(--accento); border-radius: 7px; padding: 3px 6px; margin: -2px 0 1px; }
+.ap-conta-pag { white-space: nowrap; }
 .ap-lista .sotto { font-size: 13px; color: var(--testo-2); }
 .ap-dove { color: var(--accento); }
 .ap-dafare, .ap-proposta-chip { display: inline-block; margin-top: 4px; margin-right: 4px; font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--giallo); color: var(--giallo); }
@@ -398,8 +408,6 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ap-dove-riga select { min-height: 34px; padding: 2px 8px; font-size: 14px; max-width: 200px; }
 .ap-salvato { margin-left: auto; font-size: 13px; color: var(--verde); }
 .ap-salvato.da-inviare { color: var(--giallo); }
-.ap-titolo-in { width: 100%; font-size: 22px; font-weight: 700; background: none; border: 1px solid transparent; padding: 4px 6px; min-height: 40px; margin-top: 4px; }
-.ap-titolo-in:focus { border-color: var(--bordo); background: var(--superficie); }
 .ap-proposta { display: flex; gap: 10px; align-items: center; margin: 4px 14px 6px; padding: 8px 12px; border-radius: 12px; border: 1px solid #e8825a; background: rgba(232, 130, 90, .1); font-size: 15px; }
 .ap-proposta b { color: #f6a96c; }
 .ap-proposta .corpo { flex: 1; min-width: 0; }
@@ -423,6 +431,47 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ed-spessore input { min-height: 24px; padding: 0; accent-color: var(--accento); }
 .ed-ultimi small { font-size: 11px; color: var(--testo-2); }
 .ed-ultimi button { min-width: 36px; min-height: 36px; }
+
+/* v12.3 (SPEC §3): barra degli strumenti su UNA riga, tutto visibile. Pulsanti: disegno 26×24, zona di tocco 32×36;
+   pallini 17 px in una zona 22×36; spessore corto. Con la pagina larga le parole sotto le icone (pulsanti 38 px); in
+   finestra stretta (tablet in verticale, telefono) zone da 27 px senza parole (scelta B di Daniele); se ancora non ci sta
+   (orizzontale con Sezioni aperto, telefono) la riga scorre di lato, mai su due righe (scelta A). */
+.ed-barra { flex-wrap: nowrap; gap: 0; padding: 2px 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; container-type: inline-size; }
+.ed-barra::-webkit-scrollbar { display: none; }
+.ed-barra.scorre { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), rgba(0, 0, 0, .15)); mask-image: linear-gradient(90deg, #000 calc(100% - 36px), rgba(0, 0, 0, .15)); }
+.ed-barra > * { flex: none; }
+.ed-barra > * + *:not([hidden]):not(input) { margin-left: 3px; padding-left: 3px; border-left: 1px solid var(--bordo); }
+.ed-barra .ed-gruppo { gap: 0; }
+.ed-barra button { width: 32px; min-width: 32px; height: 36px; min-height: 36px; padding: 0; border: 0; background: none; border-radius: 8px; }
+.ed-barra button span { width: 26px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 7px; font-size: 15px; }
+.ed-barra button small { display: none; font-size: 8px; margin-top: 1px; white-space: nowrap; }
+.ed-barra button.attivo { background: none; box-shadow: none; }
+.ed-barra button.attivo span { background: rgba(138, 180, 248, .18); box-shadow: inset 0 0 0 1.5px var(--accento); }
+.ed-barra .ed-col, .ed-barra-testo .ed-col { width: 22px; height: 36px; min-width: 22px !important; min-height: 36px !important; border: 0 !important; border-radius: 0 !important; box-shadow: none;
+  background: radial-gradient(circle, var(--c) 0 7.5px, rgba(255, 255, 255, .22) 8px 9px, transparent 9.5px) !important; }
+.ed-barra .ed-col.attivo, .ed-barra-testo .ed-col.attivo { box-shadow: none;
+  background: radial-gradient(circle, var(--c) 0 7px, var(--sfondo) 7.5px 8.5px, var(--accento) 9px 10.5px, transparent 11px) !important; }
+.ed-col.mod::after { content: ''; position: absolute; right: 1px; top: 8px; width: 5px; height: 5px; border-radius: 50%; background: var(--testo); box-shadow: 0 0 0 1px var(--sfondo); }
+.ed-barra .ed-libero { background: none !important; }
+.ed-barra .ed-libero::before { content: ''; position: absolute; left: 2.5px; top: 9.5px; width: 17px; height: 17px; border-radius: 50%; background: conic-gradient(#f28b82, #fdd663, #81c995, #8ab4f8, #c58af9, #f28b82); }
+.ed-barra .ed-libero::after { content: ''; position: absolute; left: 7px; top: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1.5px var(--sfondo); }
+.ed-barra .ed-libero.attivo::before { box-shadow: 0 0 0 1.5px var(--sfondo), 0 0 0 3px var(--accento); }
+.ed-barra .ed-spessore { width: 58px; min-width: 58px; font-size: 8px; white-space: nowrap; overflow: hidden; }
+.ed-barra .ed-spessore input { min-height: 18px; width: 100%; }
+.ed-barra .ed-ultimi small { font-size: 8px; margin-right: 1px; }
+.ed-barra .ed-ultimi button { width: 30px; min-width: 30px; }
+.ed-barra .ed-ultimi button small { display: block; }
+@container (min-width: 860px) {
+  .ed-barra button:not(.ed-col) { width: 38px; min-width: 38px; }
+  .ed-barra button span { height: 21px; font-size: 14px; }
+  .ed-barra button small { display: block; }
+}
+@media (max-width: 899px) {
+  .ed-barra button:not(.ed-col) { width: 27px; min-width: 27px; }
+  .ed-barra button span { width: 24px; }
+  .ed-barra .ed-ultimi button { width: 27px; min-width: 27px; }
+  .ed-barra button small { display: none; }
+}
 .ed-barra-testo { background: var(--superficie); }
 .ed-barra-testo button { min-height: 38px; min-width: 38px; padding: 2px 8px; }
 .ed-barra-testo select { min-height: 38px; padding: 2px 6px; }
@@ -503,6 +552,20 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
 .ap-bottoni { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .ap-scelte { display: flex; flex-direction: column; gap: 6px; }
 .ap-scelte button { text-align: left; white-space: pre; }
+/* v12.3 (SPEC §4): finestra per cambiare un pallino (tocco lungo) */
+.ap-fin-pallino h3 { margin-bottom: 4px; }
+.ap-fin-pallino .piccolo { margin: 0 0 12px; }
+.ap-paletta { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; margin-bottom: 12px; }
+.ap-paletta button { aspect-ratio: 1; min-height: 0; min-width: 0; padding: 0; border-radius: 50%; background: var(--c); border: 2px solid rgba(255, 255, 255, .18); }
+.ap-paletta button.attivo { box-shadow: 0 0 0 2px var(--superficie), 0 0 0 4px var(--accento); }
+.ap-pal-riga { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ap-pal-altro { position: relative; flex: 1; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px; border: 1px solid var(--bordo); border-radius: 10px; background: var(--superficie-2); cursor: pointer; }
+.ap-finestra .ap-pal-altro input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; min-height: 0; padding: 0; }
+.ap-pal-arc { width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(#f28b82, #fdd663, #81c995, #8ab4f8, #c58af9, #f28b82); flex: none; }
+.ap-pal-prima { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--testo-2); }
+.ap-pal-prima i { width: 18px; height: 18px; border-radius: 50%; display: inline-block; border: 1px solid rgba(255, 255, 255, .2); }
+.ap-pal-piede { align-items: center; }
+.ap-pal-piede .link { margin-right: auto; }
 .ap-menu { position: fixed; z-index: 41; background: var(--superficie-2); border: 1px solid var(--bordo); border-radius: 12px; padding: 4px; display: flex; flex-direction: column; min-width: 200px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
 .ap-menu button { border: 0; background: none; text-align: left; min-height: 42px; padding: 6px 12px; border-radius: 8px; }
 .ap-menu button:hover { background: var(--superficie); }
@@ -536,31 +599,38 @@ button.link { background: none; border: 0; color: var(--accento); padding: 2px; 
   body:not(.ap-tutto) .ap-guscio.ap-pannello-su:not(.ap-fisso) > .ap-velo-pann { display: block; }
   .ap-voce .ap-menu-btn { visibility: visible; }
   .ed-barra button small { display: none; }
-  .ed-barra button { min-width: 40px; min-height: 40px; }
   .ap-mini { width: 56px; height: 44px; }
   .ap-rapido-testa .piccolo { display: none; }
 }
-@media (max-width: 600px) { .ap-guscio { height: calc(100vh - 57px - 58px); height: calc(100dvh - 57px - 58px); } }
-.ap-guscio.ap-larga { grid-template-columns: 0 0 minmax(0, 1fr); }
-.ap-guscio.ap-larga > .ap-sez, .ap-guscio.ap-larga > .ap-elenco { visibility: hidden; border: 0; }
+@media (max-width: 600px) { .ap-guscio { height: calc(100vh - 41px - 58px); height: calc(100dvh - 41px - 58px); } }
+/* v12.3: "Sezioni spento" vale solo nella finestra larga. Prima queste due regole, scritte dopo il blocco della finestra
+   stretta, lo scavalcavano: con Sezioni spento in orizzontale e il tablet girato in verticale la pagina finiva in una
+   colonna larga 0 px (schermo nero in mezzo) e il pannello ▤ si apriva invisibile. */
+@media (min-width: 900px) {
+  .ap-guscio.ap-larga { grid-template-columns: 0 0 minmax(0, 1fr); }
+  .ap-guscio.ap-larga > .ap-sez, .ap-guscio.ap-larga > .ap-elenco { visibility: hidden; border: 0; }
+}
 /* v12.2 (SPEC §4): maniglie tra sezioni ed elenco, tra elenco e pagina (e sul bordo dell'indice, .ed-ind-man): linea
-   con un segno al centro; si trascinano col dito o col mouse (la penna no), doppio tocco = larghezza iniziale */
+   con un segno al centro; si trascinano col dito o col mouse (la penna no), doppio tocco = larghezza iniziale.
+   v12.3: zona toccabile 32 px (era 18, circa 3 mm: col dito al minimo si finiva sulla colonna accanto); il segno resta uguale */
 .ap-velo-pann { display: none; position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, .5); }
-.ap-man { display: none; position: absolute; top: 0; bottom: 0; width: 18px; margin-left: -9px; z-index: 8; touch-action: none; cursor: col-resize; }
+/* v12.3: sezioni ed elenco scorrono solo in verticale: un trascinamento di lato vicino a una maniglia non diventa uno scorrimento */
+.ap-guscio > .ap-sez, .ap-guscio > .ap-elenco { touch-action: pan-y; }
+.ap-man { display: none; position: absolute; top: 0; bottom: 0; width: 32px; margin-left: -16px; z-index: 8; touch-action: none; cursor: col-resize; }
 .ap-man[data-m="s"] { left: var(--ap-ws); }
 .ap-man[data-m="e"] { left: calc(var(--ap-ws) + var(--ap-we)); }
-.ap-man::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: transparent; }
-.ap-man::after { content: ''; position: absolute; left: 6px; top: 50%; width: 6px; height: 34px; margin-top: -17px; border-radius: 3px; background: #4a5361; box-shadow: 0 0 0 1px var(--sfondo); }
-.ap-man.trascino::before { left: 7px; width: 4px; background: var(--accento); }
-.ap-man.trascino::after { left: 4px; width: 10px; height: 44px; margin-top: -22px; background: var(--accento); box-shadow: 0 0 0 4px rgba(138, 180, 248, .25); }
-.ap-man-fumo { display: none; position: absolute; left: 20px; top: 50%; margin-top: -50px; white-space: nowrap; background: #2a3140; border: 1px solid var(--accento);
+.ap-man::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0; width: 2px; background: transparent; }
+.ap-man::after { content: ''; position: absolute; left: 13px; top: 50%; width: 6px; height: 34px; margin-top: -17px; border-radius: 3px; background: #4a5361; box-shadow: 0 0 0 1px var(--sfondo); }
+.ap-man.trascino::before { left: 14px; width: 4px; background: var(--accento); }
+.ap-man.trascino::after { left: 11px; width: 10px; height: 44px; margin-top: -22px; background: var(--accento); box-shadow: 0 0 0 4px rgba(138, 180, 248, .25); }
+.ap-man-fumo { display: none; position: absolute; left: 27px; top: 50%; margin-top: -50px; white-space: nowrap; background: #2a3140; border: 1px solid var(--accento);
   border-radius: 8px; padding: 4px 10px; font-size: 13px; color: var(--testo); box-shadow: 0 6px 16px rgba(0, 0, 0, .5); pointer-events: none; }
 .ap-man-fumo small { display: block; color: var(--testo-2); font-size: 11px; }
 .ap-man.trascino .ap-man-fumo { display: block; }
 @media (min-width: 900px) { body:not(.ap-tutto) .ap-guscio:not(.ap-larga) > .ap-man { display: block; } }
 body.ap-tutto.ap-cassetto .ap-guscio > .ap-man { display: block; }
-.ed-ind-man { left: auto; right: var(--ap-wi); margin-left: 0; margin-right: -9px; z-index: 5; }
-.ed-ind-man .ap-man-fumo { left: auto; right: 20px; }
+.ed-ind-man { left: auto; right: var(--ap-wi); margin-left: 0; margin-right: -16px; z-index: 5; }
+.ed-ind-man .ap-man-fumo { left: auto; right: 27px; }
 .ed-vista.ind-aperto .ed-ind-man { display: block; }
 /* indice in finestra stretta: pannello sopra la pagina col velo (tocco fuori = chiude) */
 .ed-velo { display: none; position: absolute; inset: 0; z-index: 3; background: rgba(0, 0, 0, .45); }
