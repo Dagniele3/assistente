@@ -635,12 +635,19 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-man { display: block; }
 /* indice in finestra stretta: pannello sopra la pagina col velo (tocco fuori = chiude) */
 .ed-velo { display: none; position: absolute; inset: 0; z-index: 3; background: rgba(0, 0, 0, .45); }
 .ed-vista.ind-sopra .ed-velo { display: block; }
+/* v12.4 (SPEC v12.3 §1): il telefono non è più solo lettura: barra degli strumenti sempre visibile come sul tablet (una riga,
+   scorre di lato se non ci sta), niente più ✎ per farla comparire */
 .ap-solo-telefono { display: none; }
-@media (max-width: 600px) {
-  .ap-solo-telefono { display: inline-block; }
-  .ap-editor:not(.con-barra) > .ed-barra, .ap-editor:not(.con-barra) > .ed-barra-testo { display: none; }
-  .ap-titolo-in { font-size: 19px; }
+/* finestra stretta (telefono, tablet in verticale): la barra del testo (B, I, U, colori…) sta in fondo alla pagina, subito
+   sopra la tastiera, su una riga che scorre di lato; con la tastiera aperta sparisce la barra in basso delle sezioni */
+@media (max-width: 899px) {
+  .ap-editor > .ed-barra-testo:not([hidden]) { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; flex-wrap: nowrap; overflow-x: auto;
+    scrollbar-width: none; border-top: 1px solid var(--bordo); border-bottom: 0; box-shadow: 0 -6px 16px rgba(0, 0, 0, .4); }
+  .ap-editor > .ed-barra-testo::-webkit-scrollbar { display: none; }
+  .ap-editor > .ed-barra-testo > * { flex: none; }
 }
+body.tastiera-su .barra .sezioni { display: none; }
+body.tastiera-su .ap-guscio { height: calc(100dvh - 41px); min-height: 0; }
 @media (max-width: 600px) {
   .ap-proposta { flex-wrap: wrap; margin: 4px 10px 6px; }
   .ap-proposta .corpo { flex: 1 1 calc(100% - 34px); }
@@ -699,3 +706,19 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-sez { left: 0; width: var(--ap-ws); }
 body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: var(--ap-we); }
 /* v12: a tutto schermo la striscia sta in alto a destra: l'indice parte più in basso */
 .ap-tutto .ed-indice { padding-top: 60px; }
+/* v12.4: telefono in orizzontale (finestra bassa): niente altezza minima, la pagina degli Appunti sta tutta nello schermo */
+@media (max-height: 500px) { .ap-guscio { min-height: 0; } .ed-vista { min-height: 80px; } }
+/* le righe in alto e le barre non si schiacciano mai: cede solo la pagina */
+.ap-testa-app, #ap-proposta, .ap-editor > .ed-barra, .ap-editor > .ed-barra-testo { flex-shrink: 0; }
+
+/* v12.4 (SPEC v12.3 §1): telefono, pannello ▤ a tutta larghezza con una colonna alla volta (sezioni oppure elenco, "‹ Sezioni"
+   per tornare); prima le due colonne affiancate nell'85 % di 384 px tagliavano i nomi ("L…", "Idee reg…") */
+.ap-torna-sez { display: none; }
+@media (max-width: 600px) {
+  .ap-guscio.ap-pannello-su > .ap-sez, .ap-guscio.ap-pannello-su > .ap-elenco { left: 0; width: 100%; box-shadow: none; border-right: 0; }
+  .ap-guscio.ap-pannello-su[data-telvista="elenco"] > .ap-sez { display: none; }
+  .ap-guscio.ap-pannello-su:not([data-telvista="elenco"]) > .ap-elenco { display: none; }
+  body:not(.ap-tutto) .ap-guscio.ap-pannello-su > .ap-man { display: none; }
+  .ap-guscio.ap-pannello-su .ap-torna-sez { display: inline-flex; min-height: 36px; padding: 2px 10px; margin-right: 6px; font-size: 15px; color: var(--accento); background: none; border-color: var(--bordo); }
+  .ap-testa-elenco { gap: 6px; }
+}

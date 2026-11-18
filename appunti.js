@@ -366,6 +366,7 @@ function apDisegnaSezioni() {
   const c = $('#ap-cerca', box);
   if (focus) { c.focus(); c.setSelectionRange(c.value.length, c.value.length); }
   c.oninput = () => { AP.cerca = c.value; apDisegnaElenco(); $$('.ap-voce', box).forEach(v => v.classList.toggle('attiva', !AP.cerca && v.dataset.sel === AP.sel)); if (innerWidth < 900 && AP.cerca) { AP.pannello = 'elenco'; $('.ap-guscio').dataset.pannello = 'elenco'; } };
+  c.onchange = () => { if (AP.cerca) apVistaTel('elenco'); };   // v12.4: telefono, Invio nella ricerca = mostra i risultati
   $$('.ap-filtri .chip', box).forEach(b => b.onclick = () => {
     const f = b.dataset.f;
     if (f === 'tutte') { AP.fissati = false; AP.daFare = false; }
@@ -377,6 +378,7 @@ function apDisegnaSezioni() {
     v.onclick = e => {
       if (e.target.closest('.ap-menu-btn')) return;
       AP.cerca = ''; AP.pannello = 'elenco';
+      apVistaTel('elenco');   // v12.4: sul telefono il pannello passa dalle sezioni all'elenco di quella sezione
       apVai({ s: v.dataset.sel, a: AP.aperto });   // v12.2: l'appunto aperto resta (prima, sotto i 900 px, si chiudeva)
     };
     if (v.dataset.sezione) {
@@ -401,12 +403,15 @@ function apDisegnaElenco() {
   const titolo = AP.cerca ? 'Ricerca «' + esc(AP.cerca) + '» · ' + l.length : esc(apNomeSel(AP.sel));
   const cestino = AP.sel === 'cestino' && !AP.cerca;
   box.innerHTML = `<div class="ap-testa-elenco">
+      <button type="button" class="ap-torna-sez" title="Torna alle sezioni">‹ Sezioni</button>
       <h2>${titolo}</h2>
       ${cestino ? '' : `<select id="ap-ordine" aria-label="Ordine"><option value="modifica" ${AP.ordine === 'modifica' ? 'selected' : ''}>ultima modifica</option><option value="mano" ${AP.ordine === 'mano' ? 'selected' : ''}>a mano</option></select>`}
     </div>
     <ul class="ap-lista">${l.map(r => apVoceElenco(r, cestino)).join('') || `<li class="vuoto">${AP.cerca ? 'Nessun appunto trovato' : cestino ? 'Il cestino è vuoto' : 'Nessun appunto qui. ＋ per scriverne uno.'}</li>`}</ul>`;
   const o = $('#ap-ordine', box);
   if (o) o.onchange = () => { AP.ordine = o.value; LS.set('apOrdine', o.value); apDisegnaElenco(); };
+  const torna = $('.ap-torna-sez', box);
+  if (torna) torna.onclick = () => apVistaTel('sezioni');
   $$('.ap-lista li[data-id]', box).forEach(li => {
     const id = li.dataset.id;
     li.onclick = e => {
@@ -1086,16 +1091,23 @@ function apPannello(si) {
   const g = $('.ap-guscio');
   if (!g) return;
   if (!si && g.classList.contains('ap-fisso')) return;
-  if (si) apColonne();
+  if (si) { apColonne(); apVistaTel(AP.sel ? 'elenco' : 'sezioni'); }
   g.classList.toggle('ap-pannello-su', !!si);
   apStatoVista();
 }
+/**
+ * v12.4 (SPEC v12.3 §1): sul telefono il pannello ▤ è a tutta larghezza e mostra UNA colonna alla volta: le sezioni oppure
+ * l'elenco degli appunti (con "‹ Sezioni" in alto per tornare). Tocco su una sezione = passa al suo elenco. Il CSS lo applica
+ * solo fino a 600 px; sul tablet in verticale restano le due colonne affiancate.
+ */
+function apVistaTel(v) { const g = $('.ap-guscio'); if (g) g.dataset.telvista = v; }
 /** Dopo ogni navigazione e ogni cambio di misura: pannello fisso senza appunto, chiuso quando se ne apre uno nuovo. */
 function apSistemaPannello(aperto, nuovo) {
   const g = $('.ap-guscio');
   if (!g) return;
   const fisso = apStretto() && !aperto && !document.body.classList.contains('ap-tutto');
   g.classList.toggle('ap-fisso', fisso);
+  if (fisso && !g.classList.contains('ap-pannello-su')) apVistaTel(AP.sel ? 'elenco' : 'sezioni');
   if (fisso) g.classList.add('ap-pannello-su');
   else if (nuovo) g.classList.remove('ap-pannello-su');
   apStatoVista();
@@ -1128,6 +1140,18 @@ function apMisuraFinestraOra() {
   apControlloT = setTimeout(apControllaVista, 400);
 }
 let apControlloT = 0;
+// v12.4 (SPEC v12.3 §1, telefono): con la tastiera aperta (la pagina si rimpicciolisce: interactive-widget=resizes-content)
+// si nasconde la barra in basso delle sezioni, così resta più spazio per la riga in cui si scrive.
+const apAltezzaMax = {};
+function apSegnaTastiera() {
+  const k = innerWidth;   // la tastiera cambia solo l'altezza (per orientamento sbaglierebbe: con la tastiera sembra orizzontale)
+  apAltezzaMax[k] = Math.max(apAltezzaMax[k] || 0, innerHeight);
+  const a = document.activeElement;
+  const scrive = !!(a && (a.isContentEditable || /^(INPUT|TEXTAREA)$/.test(a.tagName)));
+  document.body.classList.toggle('tastiera-su', scrive && innerHeight < apAltezzaMax[k] - 120);
+}
+window.addEventListener('resize', apSegnaTastiera);
+document.addEventListener('focusout', () => setTimeout(apSegnaTastiera, 200));
 let apFinestraRaf = 0;
 const apFinestraPoi = () => { cancelAnimationFrame(apFinestraRaf); apFinestraRaf = requestAnimationFrame(apMisuraFinestra); };
 window.addEventListener('resize', apFinestraPoi);
@@ -2191,7 +2215,26 @@ function creaEditor(box, pagina, opz) {
     if (!ed.zoomFatto && W) { ed.zoomFatto = true; if (W < 700 && !rapido) ed.v.z = Math.max(0.25, Math.min(1, W / limiti().w)); }
     ridisegna();
     if (ed.indiceAperto) disegnaIndice();   // i numeri di schermo dipendono dall'altezza
+    mostraTestoAttivo();
   }
+  /**
+   * v12.4 (SPEC v12.3 §1, telefono): quando esce la tastiera la pagina si rimpicciolisce (interactive-widget=resizes-content):
+   * la casella di testo in cui si scrive resta visibile, sopra la barra del testo e la tastiera (la vista scorre da sola).
+   */
+  function mostraTestoAttivo() {
+    const a = document.activeElement;
+    if (!a || !a.classList || !a.classList.contains('ed-testo') || !vista.contains(a)) return;
+    const r = a.getBoundingClientRect(), vr = vista.getBoundingClientRect();
+    const bt = $('.ed-barra-testo', box), sotto = bt && !bt.hidden && getComputedStyle(bt).position === 'absolute' ? bt.offsetHeight : 0;
+    const giu = vr.bottom - sotto - 12, su = vr.top + 12;
+    let d = 0;
+    if (r.bottom > giu) d = Math.min(r.bottom - giu, r.top - su);   // non spingere la cima della casella fuori dall'alto
+    else if (r.top < su) d = r.top - su;
+    if (Math.abs(d) < 2) return;
+    ed.v.y = Math.max(0, ed.v.y + d / ed.v.z);
+    ridisegna();
+  }
+  vista.addEventListener('focusin', () => setTimeout(mostraTestoAttivo, 350));
   function aPagina(cx, cy) { const r = vista.getBoundingClientRect(); return { x: ed.v.x + (cx - r.left) / ed.v.z, y: ed.v.y + (cy - r.top) / ed.v.z }; }
   /**
    * v12: la pagina "si allunga da sola": si può scorrere finché l'ultima riga scritta arriva in cima allo schermo, quindi
