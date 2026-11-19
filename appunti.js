@@ -2953,6 +2953,10 @@ function creaEditor(box, pagina, opz) {
   function gommaArea(x, y, r) {
     let cambio = false;
     const nuovi = [];
+    // v12.9: numero di questa chiamata nel trascinamento (le chiamate sono a ≤ 0,7 raggi l'una dall'altra)
+    const ga = azione && azione.tipo === 'gommaArea' ? azione : { miei: new Set() };
+    if (!ga.miei) ga.miei = new Set();
+    ga.n = (ga.n || 0) + 1;
     ed.pagina.el.forEach(e => {
       if (e.t !== 'tratto') { nuovi.push(e); return; }
       const b = apRiquadro(e), rr = r + (e.s || 0) / 2;
@@ -2963,16 +2967,19 @@ function creaEditor(box, pagina, opz) {
       // tiene quelli vecchi).
       if (e.r || e.g || e.b || e.ev || (e.s || 0) >= AP_GOMMA_BUCA) {
         if (!(vicinoATratto(e, x, y, r) || (e.r && e.p.length >= 6 && dentroPoligono(x, y, e.p)))) { nuovi.push(e); return; }
-        const a = azione && azione.tipo === 'gommaArea' ? azione : { miei: new Set() };
-        if (!a.miei) a.miei = new Set();
         let f = e;
-        if (!a.miei.has(e)) {
+        if (!ga.miei.has(e)) {
           f = Object.assign({}, e, { g: apPassate(e).map(q => q.slice()) });
           delete f.b;
-          a.miei.add(f);
+          ga.miei.add(f);
+          Object.defineProperty(f, '_pas', { value: null, writable: true, enumerable: false, configurable: true });
+          Object.defineProperty(f, '_n', { value: 0, writable: true, enumerable: false, configurable: true });
         }
-        let q = f._pas;
-        if (!q) { q = [r1(r)]; f.g.push(q); Object.defineProperty(f, '_pas', { value: q, writable: true, enumerable: false, configurable: true }); }
+        // v12.9.1: se alla chiamata prima la gomma non toccava questo tratto (è uscita e rientrata), passata nuova: prima la riga
+        // univa l'uscita al rientro e cancellava tutto quello che stava in mezzo (bordi delle forme "a tratti, dove non passo").
+        let q = f._n === ga.n - 1 ? f._pas : null;
+        f._n = ga.n;
+        if (!q) { q = [r1(r)]; f.g.push(q); f._pas = q; }
         const n = q.length;
         if (n < 3 || Math.hypot(q[n - 2] - x, q[n - 1] - y) > r * 0.2) { q.push(r1(x), r1(y)); apTogliRiquadro(f); cambio = true; }
         nuovi.push(f); return;
