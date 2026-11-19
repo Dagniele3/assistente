@@ -1685,17 +1685,35 @@ function apTratto(c, e) {
   if (p.length <= 2 || (p.length === 4 && p[0] === p[2] && p[1] === p[3])) {
     c.beginPath(); c.arc(p[0], p[1], e.s / 2, 0, Math.PI * 2); c.fill();
   } else {
-    c.beginPath();
-    c.moveTo(p[0], p[1]);
-    for (let i = 2; i < p.length - 2; i += 2) {
-      const mx = (p[i] + p[i + 2]) / 2, my = (p[i + 1] + p[i + 3]) / 2;
-      c.quadraticCurveTo(p[i], p[i + 1], mx, my);
+    apPercorso(c, p);
+    if (e.r) {   // v12.6: r 1 = velata, 2 = piena
+      c.save();
+      // v12.8: buchi della gomma a zona (b = [x, y, raggio, …]): un ritaglio per buco (riquadro meno il cerchio), uno dopo l'altro
+      if (e.b && e.b.length) {
+        const bb = apRiquadro(e);
+        for (let i = 0; i < e.b.length; i += 3) {
+          c.beginPath(); c.rect(bb.x0 - 2, bb.y0 - 2, bb.x1 - bb.x0 + 4, bb.y1 - bb.y0 + 4);
+          c.moveTo(e.b[i] + e.b[i + 2], e.b[i + 1]); c.arc(e.b[i], e.b[i + 1], e.b[i + 2], 0, Math.PI * 2, true);
+          c.clip();
+        }
+        apPercorso(c, p);
+      }
+      c.globalAlpha = e.r === 2 ? 1 : 0.25; c.fill();
+      c.restore();
+      c.globalAlpha = e.ev ? 0.38 : 1;
     }
-    c.lineTo(p[p.length - 2], p[p.length - 1]);
-    if (e.r) { c.globalAlpha = e.r === 2 ? 1 : 0.25; c.fill(); c.globalAlpha = e.ev ? 0.38 : 1; }   // v12.6: r 1 = velata, 2 = piena
-    c.stroke();
+    if (!e.sb) c.stroke();   // v12.8: sb = solo l'interno (il bordo è un tratto a parte)
   }
   c.globalAlpha = 1;
+}
+function apPercorso(c, p) {
+  c.beginPath();
+  c.moveTo(p[0], p[1]);
+  for (let i = 2; i < p.length - 2; i += 2) {
+    const mx = (p[i] + p[i + 2]) / 2, my = (p[i + 1] + p[i + 3]) / 2;
+    c.quadraticCurveTo(p[i], p[i + 1], mx, my);
+  }
+  c.lineTo(p[p.length - 2], p[p.length - 1]);
 }
 
 /** Disegna gli elementi (tratti e foto; le caselle di testo solo se conTesto) che toccano il riquadro visibile. */
@@ -2092,7 +2110,7 @@ function creaEditor(box, pagina, opz) {
       <div class="ed-gruppo ed-strumenti">${ED_STRUMENTI.filter(s => !rapido || ['penna', 'evid', 'forma', 'gomma', 'gommaArea'].indexOf(s[0]) >= 0)
         .map(s => `<button type="button" data-str="${s[0]}" title="${s[2]}"><span>${s[1]}</span><small>${s[3] || s[2]}</small></button>`).join('')}</div>
       <div class="ed-gruppo ed-colori"></div>
-      <label class="ed-spessore"><small>spessore · <b id="ed-sp-val"></b></small><input type="range" id="ed-sp" min="1" max="40" step="1"></label>
+      <div class="ed-spessore"><small title="Tocca per scegliere il numero">spessore · <b id="ed-sp-val"></b> ▾</small><input type="range" id="ed-sp" min="1" max="40" step="1"></div>
       <div class="ed-gruppo">
         <button type="button" data-az="annulla" title="Annulla (Ctrl+Z)"><span>↶</span><small>annulla</small></button>
         <button type="button" data-az="ripeti" title="Ripeti (Ctrl+Y)"><span>↷</span><small>ripeti</small></button>
@@ -2256,7 +2274,7 @@ function creaEditor(box, pagina, opz) {
     ed.pagina.titoletti = JSON.parse(s.tit);
     ed.muta = true;
   }
-  function clona(e) { const c = Object.assign({}, e); if (e.p) c.p = e.p.slice(); return c; }
+  function clona(e) { const c = Object.assign({}, e); if (e.p) c.p = e.p.slice(); if (e.b) c.b = e.b.slice(); return c; }
   function prima(ids) {
     ed.storia.push(istantanea());
     if (ed.storia.length > 60) ed.storia.shift();
@@ -2825,14 +2843,20 @@ function creaEditor(box, pagina, opz) {
     b.querySelector('button').onclick = () => { togliIncolla(); incolla(p.x, p.y); };
   }
   function trasla(e, dx, dy) {
-    if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; } apTogliRiquadro(e); }
+    if (e.t === 'tratto') {
+      for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; }
+      if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] += dx; e.b[i + 1] += dy; }   // v12.8: buchi della gomma a zona
+      apTogliRiquadro(e);
+    }
     else { e.x += dx; e.y += dy; }
   }
   function scala(e, ox, oy, k) {
-    if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] = ox + (e.p[i] - ox) * k; e.p[i + 1] = oy + (e.p[i + 1] - oy) * k; } e.s = Math.max(1, e.s * k); apTogliRiquadro(e); }
+    if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] = ox + (e.p[i] - ox) * k; e.p[i + 1] = oy + (e.p[i + 1] - oy) * k; } e.s = Math.max(1, e.s * k);
+      if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] = ox + (e.b[i] - ox) * k; e.b[i + 1] = oy + (e.b[i + 1] - oy) * k; e.b[i + 2] *= k; }
+      apTogliRiquadro(e); }
     else { e.x = ox + (e.x - ox) * k; e.y = oy + (e.y - oy) * k; e.w = Math.max(40, e.w * k); if (e.t === 'foto') e.h = e.h * k; if (e.t === 'testo') e.fs = Math.max(10, Math.round((e.fs || 18) * k)); }
   }
-  function arrotonda(e) { apTogliRiquadro(e); if (e.t === 'tratto') e.p = e.p.map(v => Math.round(v * 10) / 10); else { e.x = Math.round(e.x); e.y = Math.round(e.y); e.w = Math.round(e.w); if (e.h) e.h = Math.round(e.h); } }
+  function arrotonda(e) { apTogliRiquadro(e); if (e.t === 'tratto') { e.p = e.p.map(v => Math.round(v * 10) / 10); if (e.b) e.b = e.b.map(v => Math.round(v * 10) / 10); } else { e.x = Math.round(e.x); e.y = Math.round(e.y); e.w = Math.round(e.w); if (e.h) e.h = Math.round(e.h); } }
   function dentroPoligono(x, y, poli) {
     let dentro = false;
     for (let i = 0, j = poli.length - 2; i < poli.length; j = i, i += 2) {
@@ -2863,6 +2887,7 @@ function creaEditor(box, pagina, opz) {
       if (p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1) {
         if (e.t !== 'tratto') return e;
         if (vicinoATratto(e, p.x, p.y, 10 / ed.v.z)) return e;
+        if (e.r && e.p.length >= 6 && dentroPoligono(p.x, p.y, e.p)) return e;   // v12.8: tocco sull'interno di una forma
       }
     }
     return null;
@@ -2888,7 +2913,8 @@ function creaEditor(box, pagina, opz) {
       if (e.t !== 'tratto') return true;
       const b = apRiquadro(e);
       if (x + r < b.x0 || x - r > b.x1 || y + r < b.y0 || y - r > b.y1) return true;
-      return !vicinoATratto(e, x, y, r);
+      // v12.8: una forma riempita si cancella tutta anche toccandone l'interno
+      return !vicinoATratto(e, x, y, r) && !(e.r && e.p.length >= 6 && dentroPoligono(x, y, e.p));
     });
     return ed.pagina.el.length !== prima0;
   }
@@ -2899,6 +2925,27 @@ function creaEditor(box, pagina, opz) {
       if (e.t !== 'tratto') { nuovi.push(e); return; }
       const b = apRiquadro(e), rr = r + (e.s || 0) / 2;
       if (x + rr < b.x0 || x - rr > b.x1 || y + rr < b.y0 || y - rr > b.y1) { nuovi.push(e); return; }
+      // v12.8: interno delle forme. Solo interno (sb): ci si fa un buco. Forma intera (bordo + interno) toccata: si divide in
+      // interno (col buco, sotto) e bordo (senza riempimento, che poi si taglia come un tratto normale).
+      // Sempre oggetti nuovi: quelli vecchi possono essere nella storia di annulla.
+      const buco = f => {
+        const h = (f.b || []).slice(), n = h.length;
+        if (n && Math.hypot(h[n - 3] - x, h[n - 2] - y) < r * 0.3 && Math.abs(h[n - 1] - r) < 0.5) return f.b;   // quasi uguale all'ultimo
+        h.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(r * 10) / 10);
+        return h;
+      };
+      if (e.r && e.sb) {
+        if (vicinoATratto(e, x, y, r) || dentroPoligono(x, y, e.p)) {
+          const b2 = buco(e);
+          if (b2 !== e.b) { nuovi.push(Object.assign({}, e, { b: b2 })); cambio = true; return; }
+        }
+        nuovi.push(e); return;
+      }
+      if (e.r && e.p.length >= 6 && (vicinoATratto(e, x, y, r) || dentroPoligono(x, y, e.p))) {
+        nuovi.push(Object.assign({}, e, { id: nid(), sb: 1, b: buco(e) }));
+        e = Object.assign({}, e, { id: nid() }); delete e.r; delete e.b;
+        cambio = true;
+      }
       // v12.5: i punti di un tratto veloce sono radi: vicino alla gomma i segmenti si riempiono di punti fitti, così si
       // cancella solo dove passa (prima: un punto toccato = via i segmenti interi; passando tra due punti = niente).
       // Conta anche lo spessore del tratto (rr), così si cancella quello che si vede.
@@ -3332,12 +3379,65 @@ function creaEditor(box, pagina, opz) {
     if (['lazo', 'gomma', 'gommaArea', 'spazio', 'testo'].indexOf(ed.strumento) >= 0 && !ed.sel.length) scegliStrumento('penna');
     salvaPref(); colori();
   }
-  $('#ed-sp', box).oninput = () => {
-    const v = Number($('#ed-sp', box).value);
+  function impostaSpessore(v) {
+    v = Math.max(1, Math.min(40, Math.round(v)));
     if (ed.strumento === 'evid') pref.evSpessore = v; else if (ed.strumento === 'gommaArea') pref.gomma = v; else pref.spessore = v;
+    $('#ed-sp', box).value = v;
     $('#ed-sp-val', box).textContent = v + ' px';
     salvaPref();
-  };
+    return v;
+  }
+  /** v12.8: anteprima dello spessore v (riga col colore della penna, cerchio per la gomma a zona), grande come sulla pagina. */
+  function anteprimaSpessore(v, nominale) {
+    const z = nominale ? 1 : ed.v.z;   // nominale: senza lo zoom (pulsanti della tendina, così 1–4 px si distinguono)
+    if (ed.strumento === 'gommaArea') { const d = Math.max(4, Math.round(v * 2)); return `<i class="ed-sp-cerchio" style="width:${d}px;height:${d}px"></i>`; }
+    const ev = ed.strumento === 'evid', c = ev ? pref.evColore : (pref.colore || colorePenne()[0]);
+    return `<i class="ed-sp-riga" style="height:${Math.max(1, v * z)}px;background:${c};opacity:${ev ? 0.45 : 1};border-radius:${ev ? 0 : 99}px"></i>`;
+  }
+  // Fumetto sopra la barretta mentre la si trascina: il dito non copre il valore.
+  let fumoSp = null, fumoSpT = 0;
+  function mostraFumoSp() {
+    const sp = $('#ed-sp', box), r = sp.getBoundingClientRect(), v = Number(sp.value);
+    if (!fumoSp) { fumoSp = document.createElement('div'); fumoSp.className = 'ed-sp-fumo'; document.body.appendChild(fumoSp); }
+    fumoSp.innerHTML = `<b>${v} px</b>${anteprimaSpessore(v)}`;
+    const x = r.left + 8 + (r.width - 16) * (v - 1) / 39;
+    fumoSp.style.left = Math.max(8, Math.min(innerWidth - fumoSp.offsetWidth - 8, x - fumoSp.offsetWidth / 2)) + 'px';
+    fumoSp.style.top = Math.max(4, r.top - fumoSp.offsetHeight - 10) + 'px';
+    if (fumoSp.offsetTop < 4 || r.top - fumoSp.offsetHeight - 10 < 4) fumoSp.style.top = (r.bottom + 40) + 'px';   // niente spazio sopra: sotto, più giù
+    clearTimeout(fumoSpT);
+  }
+  function nascondiFumoSp() { clearTimeout(fumoSpT); fumoSpT = setTimeout(() => { if (fumoSp) { fumoSp.remove(); fumoSp = null; } }, 700); }
+  $('#ed-sp', box).oninput = () => { impostaSpessore(Number($('#ed-sp', box).value)); mostraFumoSp(); };
+  $('#ed-sp', box).addEventListener('pointerdown', () => mostraFumoSp());
+  ['pointerup', 'pointercancel', 'change', 'blur'].forEach(k => $('#ed-sp', box).addEventListener(k, nascondiFumoSp));
+  // Tocco sulla scritta "spessore · 3 px": tendina con − / + e valori pronti (la barretta resta solo da trascinare).
+  const AP_SPESSORI = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32];
+  $('.ed-spessore small', box).addEventListener('click', ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    const sf = document.createElement('div');
+    sf.className = 'ap-velo ap-velo-menu';
+    const att = () => Number($('#ed-sp', box).value);
+    const disegna = () => {
+      sf.innerHTML = `<div class="ap-menu ed-spessori"><div class="ed-sp-pm"><button type="button" data-d="-1">−</button><b>${att()} px</b><button type="button" data-d="1">+</button></div>
+        <div class="ed-sp-prova">${anteprimaSpessore(att())}</div>` +
+        AP_SPESSORI.map(v => `<button type="button" data-v="${v}" class="${v === att() ? 'attivo' : ''}"><span>${anteprimaSpessore(v, true)}</span><small>${v}</small></button>`).join('') + '</div>';
+    };
+    disegna();
+    document.body.appendChild(sf);
+    const m = $('.ap-menu', sf), r = $('.ed-spessore', box).getBoundingClientRect();
+    m.style.left = Math.min(innerWidth - m.offsetWidth - 8, Math.max(8, r.left - 20)) + 'px';
+    m.style.top = (r.bottom + 4) + 'px';
+    sf.onclick = e => {
+      const d = e.target.closest('[data-d]'), b = e.target.closest('[data-v]');
+      if (d) {   // − / + : la tendina resta aperta
+        impostaSpessore(att() + Number(d.dataset.d));
+        const l = m.style.left, t = m.style.top; disegna(); const m2 = $('.ap-menu', sf); m2.style.left = l; m2.style.top = t;
+        return;
+      }
+      if (b) impostaSpessore(Number(b.dataset.v));
+      if (b || e.target === sf) sf.remove();
+    };
+  });
   function scegliStrumento(s) {
     ed.strumento = s;
     $$('.ed-barra [data-str]', box).forEach(b => b.classList.toggle('attivo', b.dataset.str === s));
@@ -3545,7 +3645,7 @@ function apSpostaSelezione(elementi, foto, togli) {
       const dy = (p.el.length ? L.h : 40) - y0, dx = 40 - x0;
       elementi.forEach(e => {
         e.id = Math.random().toString(36).slice(2, 9);
-        if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; } } else { e.x += dx; e.y += dy; }
+        if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; } if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] += dx; e.b[i + 1] += dy; } } else { e.x += dx; e.y += dy; }
         p.el.push(e);
       });
       Object.assign(p.foto, fotoUsate);

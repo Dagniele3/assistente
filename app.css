@@ -746,3 +746,22 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: v
 .ed-incolla button { font-weight: 600; }
 .ed-forme .ed-riempi { grid-column: 1 / -1; display: flex; gap: 4px; }
 .ed-forme .ed-riempi button { flex: 1; font-size: 13px; min-height: 40px; white-space: nowrap; }
+
+/* v12.8: spessore. Fumetto sopra la barretta mentre si trascina; tendina con − / + e valori pronti (tocco sulla scritta). */
+.ed-barra .ed-spessore small { cursor: pointer; padding: 3px 0 2px; color: var(--accento); }
+.ed-sp-fumo { position: fixed; z-index: 60; pointer-events: none; background: var(--superficie-2); border: 1px solid var(--bordo); border-radius: 12px;
+  padding: 6px 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 76px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.ed-sp-fumo b { font-size: 20px; }
+.ed-sp-riga { display: block; width: 56px; max-height: 40px; }
+.ed-sp-cerchio { display: block; max-width: 80px; max-height: 80px; border-radius: 50%; border: 1.5px solid #f28b82; }
+.ap-menu.ed-spessori { display: grid; grid-template-columns: repeat(5, 52px); gap: 4px; min-width: 0; padding: 8px; }
+.ed-spessori .ed-sp-pm { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ed-spessori .ed-sp-pm button { width: 64px; min-height: 44px; font-size: 24px; text-align: center; background: var(--superficie); }
+.ed-spessori .ed-sp-pm b { font-size: 20px; }
+.ed-spessori .ed-sp-prova { grid-column: 1 / -1; display: flex; justify-content: center; align-items: center; min-height: 44px; }
+.ed-spessori > button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 52px; padding: 2px; text-align: center; }
+.ed-spessori > button span { height: 30px; display: flex; align-items: center; justify-content: center; }
+.ed-spessori > button span .ed-sp-riga { width: 32px; max-height: 26px; }
+.ed-spessori > button span .ed-sp-cerchio { max-width: 28px; max-height: 28px; }
+.ed-spessori > button small { font-size: 11px; color: var(--testo-2); }
+.ed-spessori > button.attivo { background: rgba(138, 180, 248, .18); box-shadow: inset 0 0 0 1.5px var(--accento); }
