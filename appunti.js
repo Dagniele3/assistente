@@ -1692,7 +1692,7 @@ function apTratto(c, e) {
       c.quadraticCurveTo(p[i], p[i + 1], mx, my);
     }
     c.lineTo(p[p.length - 2], p[p.length - 1]);
-    if (e.r) { c.globalAlpha = 0.25; c.fill(); c.globalAlpha = e.ev ? 0.38 : 1; }   // v12.6: forma piena (tinta leggera)
+    if (e.r) { c.globalAlpha = e.r === 2 ? 1 : 0.25; c.fill(); c.globalAlpha = e.ev ? 0.38 : 1; }   // v12.6: r 1 = velata, 2 = piena
     c.stroke();
   }
   c.globalAlpha = 1;
@@ -1971,10 +1971,12 @@ const AP_FORME = [
   ['linea', '╱', 'linea'], ['freccia', '↗', 'freccia'], ['doppia', '↔', 'doppia freccia'], ['rettangolo', '□', 'rettangolo'],
   ['cerchio', '○', 'cerchio'], ['ellisse', '⬭', 'ellisse'], ['triangolo', '△', 'triangolo'], ['rombo', '◇', 'rombo'],
   ['spunta', '✓', 'spunta', 1], ['croce', '✗', 'croce', 1], ['stella', '★', 'stella', 1], ['esclamativo', '!', 'punto esclamativo', 1],
-  ['domanda', '?', 'punto di domanda', 1],
+  ['domanda', '?', 'punto di domanda', 1], ['cuore', '♡', 'cuore', 1], ['fumetto', '🗨', 'fumetto', 1], ['asterisco', '✱', 'asterisco', 1],
 ];
-// Forme che si possono riempire (interruttore "piena" nella tendina: tinta leggera del colore della penna, r: 1 nel tratto)
-const AP_FORME_CHIUSE = ['rettangolo', 'cerchio', 'ellisse', 'triangolo', 'rombo', 'stella'];
+// Forme che si possono riempire. Scelta in fondo alla tendina: vuote, velate (25 % del colore della penna, r: 1 nel tratto),
+// piene (stesso colore, r: 2).
+const AP_FORME_CHIUSE = ['rettangolo', 'cerchio', 'ellisse', 'triangolo', 'rombo', 'stella', 'cuore', 'fumetto'];
+const AP_RIEMPI = ['◻ vuote', '▨ velate', '◼ piene'];
 function apFormaInfo(f) { return AP_FORME.find(x => x[0] === f) || AP_FORME[1]; }
 /** Linee quasi orizzontali, verticali o a 45° (entro 7°) diventano esatte. */
 function apAggancia(x0, y0, x, y) {
@@ -2034,6 +2036,21 @@ function apPuntiForma(f, a, b, s) {
     const p = curva(xm, cy, rr, rr, Math.PI, Math.PI * 2.45, 24);
     p.push(r(xm), r(y0 + h * 0.68));
     out.push(p); out.push(puntino());
+  }
+  else if (f === 'cuore') {   // curva classica del cuore (x = 16 sin³t, y = 13 cos t − …), messa nel riquadro
+    const p = [];
+    for (let i = 0; i <= 64; i++) {
+      const t = Math.PI * 2 * i / 64, X = 16 * Math.pow(Math.sin(t), 3), Y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      p.push(r(xm + X / 16 * w / 2), r(y0 + (12 - Y) / 29 * h));
+    }
+    out.push(p);
+  }
+  else if (f === 'fumetto') {
+    const yb = y0 + h * 0.74;
+    spezzata([[x0, y0], [x1, y0], [x1, yb], [x0 + w * 0.42, yb], [x0 + w * 0.18, y1], [x0 + w * 0.24, yb], [x0, yb]], true);
+  }
+  else if (f === 'asterisco') {
+    for (let i = 0; i < 3; i++) { const t = Math.PI / 2 + i * Math.PI / 3, dx = w / 2 * Math.cos(t), dy = h / 2 * Math.sin(t); spezzata([[xm - dx, ym - dy], [xm + dx, ym + dy]]); }
   }
   return out;
 }
@@ -3218,9 +3235,12 @@ function creaEditor(box, pagina, opz) {
   }
   /** Tratti (elementi) della forma f da a a b, col colore e lo spessore della penna. */
   function tratti(f, a, b) {
-    const c = pref.colore || colorePenne()[0], s = pref.spessore || 3, piena = pref.riempi && AP_FORME_CHIUSE.indexOf(f) >= 0;
-    return apPuntiForma(f, a, b, s).filter(p => p.length >= 2).map(p => Object.assign({ t: 'tratto', id: nid(), c, s, p }, piena ? { r: 1 } : {}));
+    const c = pref.colore || colorePenne()[0], s = pref.spessore || 3, r = AP_FORME_CHIUSE.indexOf(f) >= 0 ? riempi() : 0;
+    // solo il primo tratto (il contorno) si riempie: gli altri (es. il puntino) no
+    return apPuntiForma(f, a, b, s).filter(p => p.length >= 2).map((p, i) => Object.assign({ t: 'tratto', id: nid(), c, s, p }, r && !i ? { r } : {}));
   }
+  /** Interno delle forme chiuse: 0 vuote, 1 velate, 2 piene (dalla v12.6 "true" = velate). */
+  function riempi() { return pref.riempi === true ? 1 : (pref.riempi === 1 || pref.riempi === 2 ? pref.riempi : 0); }
   function guidaGomma(q, r) { prepVivo(); cvv.strokeStyle = 'rgba(242,139,130,.9)'; cvv.lineWidth = 1.5 / ed.v.z; cvv.beginPath(); cvv.arc(q.x, q.y, r, 0, Math.PI * 2); cvv.stroke(); }
   function guidaSpazio(y0, dy) {
     prepVivo(); cvv.fillStyle = 'rgba(138,180,248,.12)'; cvv.fillRect(ed.v.x, y0, W / ed.v.z, Math.max(0, dy));
@@ -3364,16 +3384,17 @@ function creaEditor(box, pagina, opz) {
     sf.className = 'ap-velo ap-velo-menu';
     sf.innerHTML = '<div class="ap-menu ed-forme"><small>Forme · trascina</small>' + AP_FORME.filter(x => !x[3]).map(bottone).join('') +
       '<small>Simboli · tocca o trascina</small>' + AP_FORME.filter(x => x[3]).map(bottone).join('') +
-      `<button type="button" data-riempi="1" class="ed-riempi ${pref.riempi ? 'attivo' : ''}" title="Riempi rettangolo, cerchio, ellisse, triangolo, rombo e stella">${pref.riempi ? '◼ piene' : '◻ vuote'}</button></div>`;
+      '<small>Interno delle forme chiuse</small><div class="ed-riempi">' +
+      AP_RIEMPI.map((x, i) => `<button type="button" data-riempi="${i}" class="${riempi() === i ? 'attivo' : ''}">${x}</button>`).join('') + '</div></div>';
     box.ownerDocument.body.appendChild(sf);
     const m = $('.ap-menu', sf), r = btn.getBoundingClientRect();
     m.style.left = Math.min(innerWidth - m.offsetWidth - 8, Math.max(8, r.left)) + 'px';
     m.style.top = (r.bottom + m.offsetHeight + 8 > innerHeight ? Math.max(8, r.top - m.offsetHeight - 4) : r.bottom + 4) + 'px';
     sf.onclick = e => {
       const rp = e.target.closest('[data-riempi]');
-      if (rp) {   // l'interruttore non chiude la tendina
-        pref.riempi = !pref.riempi; salvaPref();
-        rp.classList.toggle('attivo', !!pref.riempi); rp.textContent = pref.riempi ? '◼ piene' : '◻ vuote';
+      if (rp) {   // la scelta dell'interno non chiude la tendina
+        pref.riempi = Number(rp.dataset.riempi); salvaPref();
+        $$('[data-riempi]', sf).forEach(x => x.classList.toggle('attivo', x === rp));
         return;
       }
       const b = e.target.closest('[data-f]');
