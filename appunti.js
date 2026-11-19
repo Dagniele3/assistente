@@ -1670,10 +1670,14 @@ function apSfondo(c, sfondo, x0, y0, x1, y1) {
   if (motivo === 'vuoto') return;
   c.strokeStyle = s.riga;
   c.lineWidth = 1;
+  // v12.10: "piccoli" = quadretti piccoli (metà passo, righe un po' più tenui)
+  const passo = motivo === 'piccoli' ? AP_PASSO / 2 : AP_PASSO;
+  if (motivo === 'piccoli') c.globalAlpha = 0.6;
   c.beginPath();
-  for (let y = Math.ceil(y0 / AP_PASSO) * AP_PASSO; y <= y1; y += AP_PASSO) { c.moveTo(x0, y + 0.5); c.lineTo(x1, y + 0.5); }
-  if (motivo === 'quadretti') for (let x = Math.ceil(x0 / AP_PASSO) * AP_PASSO; x <= x1; x += AP_PASSO) { c.moveTo(x + 0.5, y0); c.lineTo(x + 0.5, y1); }
+  for (let y = Math.ceil(y0 / passo) * passo; y <= y1; y += passo) { c.moveTo(x0, y + 0.5); c.lineTo(x1, y + 0.5); }
+  if (motivo === 'quadretti' || motivo === 'piccoli') for (let x = Math.ceil(x0 / passo) * passo; x <= x1; x += passo) { c.moveTo(x + 0.5, y0); c.lineTo(x + 0.5, y1); }
   c.stroke();
+  c.globalAlpha = 1;
 }
 
 function apTratto(c, e) {
@@ -2416,7 +2420,10 @@ function creaEditor(box, pagina, opz) {
   }
   function limitaVista() {
     const L = limiti();
-    const maxX = Math.max(0, Math.max(L.w, AP_LARGHEZZA) - W / ed.v.z + 120), maxY = maxScorri(L);
+    // v12.10: a destra si può andare oltre la pagina di mezzo schermo (prima 120 punti, ~4 quadretti); scrivendo lì la pagina
+    // si allarga e si può andare avanti di altro mezzo schermo.
+    const oltre = Math.max(120, W / ed.v.z * 0.5);
+    const maxX = Math.max(0, Math.max(L.w, AP_LARGHEZZA) - W / ed.v.z + oltre), maxY = maxScorri(L);
     ed.v.x = Math.max(0, Math.min(maxX, ed.v.x));
     ed.v.y = Math.max(0, Math.min(maxY, ed.v.y));
     return L;
@@ -3608,7 +3615,7 @@ function creaEditor(box, pagina, opz) {
     if (a === 'titoletto') nuovoTitoletto(null);
     if (a === 'foto') $('#ed-file', box).click();
     if (a === 'tastiera') { scegliStrumento('testo'); const L = limiti(); nuovoTesto(24, Math.min(L.h - 30, ed.v.y + 40)); }
-    if (a === 'sfondo') apScegli('Sfondo della pagina', [['scuro|vuoto', 'Scuro, vuoto'], ['scuro|righe', 'Scuro a righe'], ['scuro|quadretti', 'Scuro a quadretti'], ['chiaro|vuoto', 'Chiaro, vuoto'], ['chiaro|righe', 'Chiaro a righe'], ['chiaro|quadretti', 'Chiaro a quadretti']])
+    if (a === 'sfondo') apScegli('Sfondo della pagina', [['scuro|vuoto', 'Scuro, vuoto'], ['scuro|righe', 'Scuro a righe'], ['scuro|quadretti', 'Scuro a quadretti'], ['scuro|piccoli', 'Scuro a quadretti piccoli'], ['chiaro|vuoto', 'Chiaro, vuoto'], ['chiaro|righe', 'Chiaro a righe'], ['chiaro|quadretti', 'Chiaro a quadretti'], ['chiaro|piccoli', 'Chiaro a quadretti piccoli']])
       .then(v => { if (!v) return; const p = v.split('|'); ed.pagina.sfondo = { colore: p[0], motivo: p[1] }; colori(); ridisegna(); cambiato(); });
   });
   $('#ed-file', box).onchange = ev => {
