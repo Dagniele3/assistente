@@ -1692,6 +1692,7 @@ function apTratto(c, e) {
       c.quadraticCurveTo(p[i], p[i + 1], mx, my);
     }
     c.lineTo(p[p.length - 2], p[p.length - 1]);
+    if (e.r) { c.globalAlpha = 0.25; c.fill(); c.globalAlpha = e.ev ? 0.38 : 1; }   // v12.6: forma piena (tinta leggera)
     c.stroke();
   }
   c.globalAlpha = 1;
@@ -1958,9 +1959,88 @@ function rendiMiniatura(pagina) {
 // come la vista. Vista = { x, y } (angolo in alto a sinistra in punti pagina) e z (zoom).
 
 const ED_STRUMENTI = [
-  ['penna', '✒', 'penna'], ['evid', '🖍', 'evidenziatore', 'evidenz.'], ['testo', 'T', 'testo'], ['lazo', '➰', 'lazo'],
+  ['penna', '✒', 'penna'], ['evid', '🖍', 'evidenziatore', 'evidenz.'], ['testo', 'T', 'testo'],
+  ['forma', '↗', 'forme (tieni premuto per sceglierla)', 'forme'], ['lazo', '➰', 'lazo'],
   ['gomma', '⌫', 'gomma'], ['gommaArea', '▭', 'g. area'],
 ];
+
+// v12.6: forme e simboli. [nome, icona, descrizione, simbolo?]. Diventano tratti normali di penna (colore e spessore della
+// penna): gomma, gomma a zona, lazo, annulla e sincronizzazione funzionano come sempre. Si disegnano trascinando; i simboli
+// anche con un tocco (grandezza dallo spessore).
+const AP_FORME = [
+  ['linea', '╱', 'linea'], ['freccia', '↗', 'freccia'], ['doppia', '↔', 'doppia freccia'], ['rettangolo', '□', 'rettangolo'],
+  ['cerchio', '○', 'cerchio'], ['ellisse', '⬭', 'ellisse'], ['triangolo', '△', 'triangolo'], ['rombo', '◇', 'rombo'],
+  ['spunta', '✓', 'spunta', 1], ['croce', '✗', 'croce', 1], ['stella', '★', 'stella', 1], ['esclamativo', '!', 'punto esclamativo', 1],
+  ['domanda', '?', 'punto di domanda', 1],
+];
+// Forme che si possono riempire (interruttore "piena" nella tendina: tinta leggera del colore della penna, r: 1 nel tratto)
+const AP_FORME_CHIUSE = ['rettangolo', 'cerchio', 'ellisse', 'triangolo', 'rombo', 'stella'];
+function apFormaInfo(f) { return AP_FORME.find(x => x[0] === f) || AP_FORME[1]; }
+/** Linee quasi orizzontali, verticali o a 45° (entro 7°) diventano esatte. */
+function apAggancia(x0, y0, x, y) {
+  const L = Math.hypot(x - x0, y - y0);
+  if (L < 1) return [x, y];
+  const ang = Math.atan2(y - y0, x - x0), passo = Math.PI / 4, vicino = Math.round(ang / passo) * passo;
+  if (Math.abs(ang - vicino) > 7 * Math.PI / 180) return [x, y];
+  return [x0 + L * Math.cos(vicino), y0 + L * Math.sin(vicino)];
+}
+/** Punti dei tratti di una forma dal punto a al punto b (spessore s): elenco di elenchi [x0, y0, x1, y1, …].
+ *  Gli spigoli sono ripetuti: così il disegno morbido dei tratti (apTratto) li lascia vivi. */
+function apPuntiForma(f, a, b, s) {
+  const r = v => Math.round(v * 10) / 10, out = [];
+  const spezzata = (pts, chiusa) => {
+    const l = chiusa ? pts.concat([pts[0]]) : pts, p = [];
+    l.forEach((q, i) => { p.push(r(q[0]), r(q[1])); if (i > 0 && i < l.length - 1) p.push(r(q[0]), r(q[1])); });
+    out.push(p);
+  };
+  const curva = (cx, cy, rx, ry, da, a2, n) => {
+    const p = [];
+    for (let i = 0; i <= n; i++) { const t = da + (a2 - da) * i / n; p.push(r(cx + rx * Math.cos(t)), r(cy + ry * Math.sin(t))); }
+    return p;
+  };
+  let bx = b.x, by = b.y;
+  if (f === 'linea' || f === 'freccia' || f === 'doppia') [bx, by] = apAggancia(a.x, a.y, b.x, b.y);
+  if (f === 'cerchio') {   // quadrato che parte da a
+    const l = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    bx = a.x + (b.x >= a.x ? l : -l); by = a.y + (b.y >= a.y ? l : -l);
+  }
+  const x0 = Math.min(a.x, bx), x1 = Math.max(a.x, bx), y0 = Math.min(a.y, by), y1 = Math.max(a.y, by);
+  const w = x1 - x0, h = y1 - y0, xm = (x0 + x1) / 2, ym = (y0 + y1) / 2;
+  const puntino = () => curva(xm, y1 - s, s * 0.5, s * 0.5, 0, Math.PI * 2, 8);   // pieno, largo il doppio del tratto
+  const punta = (px, py, qx, qy) => {   // ali della freccia in q, venendo da p
+    const L = Math.hypot(qx - px, qy - py) || 1, k = Math.min(Math.max(12, s * 4), L * 0.45), ang = Math.atan2(qy - py, qx - px), ap = 0.5;
+    return [[qx - k * Math.cos(ang - ap), qy - k * Math.sin(ang - ap)], [qx - k * Math.cos(ang + ap), qy - k * Math.sin(ang + ap)]];
+  };
+  if (f === 'linea') spezzata([[a.x, a.y], [bx, by]]);
+  else if (f === 'freccia') { const [l, d] = punta(a.x, a.y, bx, by); spezzata([[a.x, a.y], [bx, by], l, [bx, by], d]); }
+  else if (f === 'doppia') {
+    const [l, d] = punta(a.x, a.y, bx, by), [l2, d2] = punta(bx, by, a.x, a.y);
+    spezzata([l2, [a.x, a.y], d2, [a.x, a.y], [bx, by], l, [bx, by], d]);
+  }
+  else if (f === 'rettangolo') spezzata([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true);
+  else if (f === 'cerchio' || f === 'ellisse') out.push(curva(xm, ym, w / 2, h / 2, -Math.PI / 2, Math.PI * 1.5, Math.max(24, Math.min(96, Math.round((w + h) / 6)))));
+  else if (f === 'triangolo') spezzata([[x0, y1], [xm, y0], [x1, y1]], true);
+  else if (f === 'rombo') spezzata([[xm, y0], [x1, ym], [xm, y1], [x0, ym]], true);
+  else if (f === 'spunta') spezzata([[x0, y0 + h * 0.55], [x0 + w * 0.38, y1], [x1, y0]]);
+  else if (f === 'croce') { spezzata([[x0, y0], [x1, y1]]); spezzata([[x1, y0], [x0, y1]]); }
+  else if (f === 'stella') {
+    const pts = [];
+    for (let i = 0; i < 10; i++) { const t = -Math.PI / 2 + i * Math.PI / 5, k = i % 2 ? 0.4 : 1; pts.push([xm + w / 2 * k * Math.cos(t), ym + h / 2 * k * Math.sin(t)]); }
+    spezzata(pts, true);
+  }
+  else if (f === 'esclamativo') { spezzata([[xm, y0], [xm, y0 + h * 0.68]]); out.push(puntino()); }
+  else if (f === 'domanda') {
+    const rr = Math.min(w / 2, h * 0.27), cy = y0 + rr;
+    const p = curva(xm, cy, rr, rr, Math.PI, Math.PI * 2.45, 24);
+    p.push(r(xm), r(y0 + h * 0.68));
+    out.push(p); out.push(puntino());
+  }
+  return out;
+}
+// v12.6: copiati col lazo, da incollare anche in un'altra pagina ({ el, foto }, coordinate dall'angolo in alto a sinistra).
+// In memoria; anche in LS "apCopiati" se ci sta (le foto possono essere grandi).
+let apCopiati = null;
+function apLeggiCopiati() { return apCopiati || LS.get('apCopiati', null); }
 
 // v12.5: modi della pagina. [icona, scritta sul pulsante, nome, spiegazione]. Predefinito: Dito sul telefono, Penna altrove.
 const AP_MODI = {
@@ -1992,7 +2072,7 @@ function creaEditor(box, pagina, opz) {
   box.innerHTML = `
     <div class="ed-barra" ${opz.soloLettura ? 'hidden' : ''}>
       <div class="ed-gruppo ed-modo-g"><button type="button" data-az="modo" class="ed-modo" title="Cosa fanno la penna e il dito"><span></span><small></small></button></div>
-      <div class="ed-gruppo ed-strumenti">${ED_STRUMENTI.filter(s => !rapido || ['penna', 'evid', 'gomma', 'gommaArea'].indexOf(s[0]) >= 0)
+      <div class="ed-gruppo ed-strumenti">${ED_STRUMENTI.filter(s => !rapido || ['penna', 'evid', 'forma', 'gomma', 'gommaArea'].indexOf(s[0]) >= 0)
         .map(s => `<button type="button" data-str="${s[0]}" title="${s[2]}"><span>${s[1]}</span><small>${s[3] || s[2]}</small></button>`).join('')}</div>
       <div class="ed-gruppo ed-colori"></div>
       <label class="ed-spessore"><small>spessore · <b id="ed-sp-val"></b></small><input type="range" id="ed-sp" min="1" max="40" step="1"></label>
@@ -2652,7 +2732,7 @@ function creaEditor(box, pagina, opz) {
     const s = strato.querySelector('.ed-sel');
     ed.sel = ed.sel.filter(id => elDi(id));
     const b = riquadroSel();
-    let barra = box.querySelector('.ed-barra-sel');
+    let barra = box.querySelector('.ed-barra-sel:not(.ed-incolla)');
     if (!s) return;
     if (!b) { s.hidden = true; if (barra) barra.remove(); return; }
     s.hidden = false;
@@ -2662,7 +2742,7 @@ function creaEditor(box, pagina, opz) {
     if (!barra) {
       barra = document.createElement('div');
       barra.className = 'ed-barra-sel';
-      barra.innerHTML = `<button type="button" data-s="colore">● colore</button><button type="button" data-s="copia">⧉ copia</button>
+      barra.innerHTML = `<button type="button" data-s="colore">● colore</button><button type="button" data-s="copia" title="Copia (Ctrl+C): poi incolla anche in un'altra pagina">📋 copia</button><button type="button" data-s="duplica">⧉ duplica</button>
         <button type="button" data-s="elimina">🗑 elimina</button><button type="button" data-s="sposta">↗ sposta in…</button><button type="button" data-s="spazio">⇕ inserisci spazio</button>${rapido ? '' : '<button type="button" data-s="titoletto">🏷 titoletto</button>'}`;
       vista.appendChild(barra);
       $$('button', barra).forEach(bt => bt.onclick = () => azioneSel(bt.dataset.s));
@@ -2681,6 +2761,14 @@ function creaEditor(box, pagina, opz) {
       toast('Colore: quello della penna scelta');
     }
     if (a === 'copia') {
+      const b = riquadroSel(), foto = {};
+      const el = ed.sel.map(id => { const c = JSON.parse(JSON.stringify(elDi(id))); trasla(c, -(b.x0 + 6), -(b.y0 + 6)); return c; });
+      el.forEach(e => { if (e.t === 'foto' && ed.pagina.foto[e.f]) foto[e.f] = ed.pagina.foto[e.f]; });
+      apCopiati = { el, foto };
+      if (!LS.set('apCopiati', apCopiati)) try { localStorage.removeItem('apCopiati'); } catch (e) { /* niente */ }
+      toast('Copiato. Per incollare: ➰ lazo, tocca un punto vuoto (anche in un\'altra pagina) e premi «Incolla qui» · Ctrl+V');
+    }
+    if (a === 'duplica') {
       prima();
       const nuovi = ed.sel.map(id => { const c = JSON.parse(JSON.stringify(elDi(id))); c.id = nid(); trasla(c, 24, 24); return c; });
       ed.pagina.el = ed.pagina.el.concat(nuovi);
@@ -2691,6 +2779,33 @@ function creaEditor(box, pagina, opz) {
     if (a === 'sposta' && opz.spostaIn) opz.spostaIn(ed.sel.map(id => JSON.parse(JSON.stringify(elDi(id)))), ed.pagina.foto, () => {
       prima(); ed.pagina.el = ed.pagina.el.filter(e => ed.sel.indexOf(e.id) < 0); ed.sel = []; montaTesti(); ridisegna(); cambiato(true);
     });
+  }
+  /** v12.6: incolla i copiati con l'angolo in alto a sinistra in (x, y) della pagina; restano selezionati. */
+  function incolla(x, y) {
+    const c = apLeggiCopiati();
+    if (!c || !c.el || !c.el.length) { toast('Niente da incollare: prima seleziona col lazo e premi 📋 copia'); return; }
+    prima();
+    const nuovi = c.el.map(o => { const e = JSON.parse(JSON.stringify(o)); e.id = nid(); trasla(e, x, y); arrotonda(e); return e; });
+    Object.keys(c.foto || {}).forEach(k => { if (!ed.pagina.foto[k]) ed.pagina.foto[k] = c.foto[k]; });
+    nuovi.forEach(e => { if (e.t === 'foto' && ed.pagina.foto[e.f]) apImmagine(ed.pagina.foto[e.f]).pronta.then(ridisegna); });
+    ed.pagina.el = ed.pagina.el.concat(nuovi);
+    if (ed.strumento !== 'lazo') scegliStrumento('lazo');
+    ed.sel = nuovi.map(e => e.id);
+    montaTesti(); ridisegna(); cambiato();
+  }
+  function togliIncolla() { const b = box.querySelector('.ed-incolla'); if (b) b.remove(); }
+  /** Pulsantino «Incolla qui» vicino al punto toccato col lazo (se c'è qualcosa di copiato). */
+  function barraIncolla(p, cx, cy) {
+    togliIncolla();
+    if (!apLeggiCopiati() || opz.soloLettura) return;
+    const b = document.createElement('div');
+    b.className = 'ed-barra-sel ed-incolla';
+    b.innerHTML = '<button type="button">📋 Incolla qui</button>';
+    vista.appendChild(b);
+    const r = vista.getBoundingClientRect();
+    b.style.left = Math.max(4, Math.min(W - b.offsetWidth - 4, cx - r.left - 10)) + 'px';
+    b.style.top = Math.max(4, Math.min(H - b.offsetHeight - 4, cy - r.top + 10)) + 'px';
+    b.querySelector('button').onclick = () => { togliIncolla(); incolla(p.x, p.y); };
   }
   function trasla(e, dx, dy) {
     if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; } apTogliRiquadro(e); }
@@ -2826,6 +2941,7 @@ function creaEditor(box, pagina, opz) {
   }
   vista.addEventListener('pointerdown', ev => {
     if (ev.target.closest('.ed-barra-sel,.ed-barretta,.ed-indice,.ed-fumetto')) return;
+    togliIncolla();
     const fl = ev.target.closest('.ed-tit-fl');
     if (fl && ev.pointerType !== 'pen') { ev.preventDefault(); menuTitoletto(fl.dataset.id); return; }
     const suTesto = ev.target.closest('.ed-guscio-testo');
@@ -2889,6 +3005,8 @@ function creaEditor(box, pagina, opz) {
       azione = { tipo: 'tratto', e: { t: 'tratto', id: nid(), c: ev2 ? pref.evColore : (pref.colore || colorePenne()[0]), s: ev2 ? pref.evSpessore : pref.spessore, ev: ev2 || undefined, p: [r1(p.x), r1(p.y)] } };
       if (!ev2) delete azione.e.ev;
       disegnaVivo();
+    } else if (str === 'forma') {
+      azione = { tipo: 'forma', f: pref.forma || 'freccia', a: p, b: p, mosso: false };
     } else if (str === 'gomma' || str === 'gommaArea') {
       prima();
       azione = { tipo: str, cambio: false, r: (str === 'gomma' ? 6 : pref.gomma) / ed.v.z, ultimo: p };
@@ -2906,8 +3024,37 @@ function creaEditor(box, pagina, opz) {
       prima(sotto);
       azione = { tipo: 'spazio', y0: p.y, dy: 0, sotto, tit: titoletti().filter(t => t.y >= p.y).map(t => t.id) };
     }
-    if (azione) { azione.pid = ev.pointerId; azione.dito = daDito; azione.cx = ev.clientX; azione.cy = ev.clientY; }
+    if (azione) { azione.pid = ev.pointerId; azione.dito = daDito; azione.cx = ev.clientX; azione.cy = ev.clientY; azione.c0 = azione.c0 || { x: ev.clientX, y: ev.clientY }; }
+    if (azione && azione.tipo === 'tratto') fermoTratto(ev.clientX, ev.clientY);
   });
+  // v12.6: tenendo ferma la penna (o il dito) 0,6 s alla fine di un tratto quasi dritto, il tratto diventa una riga dritta;
+  // poi, finché non si alza, la fine segue la penna (dritta, agganciata a 0°/45°/90°).
+  const AP_FERMO_MS = 600;
+  function fermoTratto(cx, cy) {
+    const a = azione;
+    if (!a || a.tipo !== 'tratto' || a.dritta) return;
+    if (a.fx == null || Math.hypot(cx - a.fx, cy - a.fy) > 5) {
+      a.fx = cx; a.fy = cy;
+      clearTimeout(a.ft);
+      a.ft = setTimeout(() => raddrizza(a), AP_FERMO_MS);
+    }
+  }
+  function raddrizza(a) {
+    if (azione !== a || a.dritta) return;
+    const p = a.e.p, n = p.length;
+    if (n < 6) return;
+    const x0 = p[0], y0 = p[1], x1 = p[n - 2], y1 = p[n - 1], L = Math.hypot(x1 - x0, y1 - y0);
+    if (L * ed.v.z < 30) return;   // troppo corto: è un puntino o una lettera
+    // solo se è già quasi dritto (scostamento massimo dalla corda ≤ 22 % della lunghezza): le lettere scritte piano restano
+    let dev = 0;
+    for (let i = 2; i < n - 2; i += 2) dev = Math.max(dev, Math.abs((x1 - x0) * (y0 - p[i + 1]) - (x0 - p[i]) * (y1 - y0)) / L);
+    if (dev > L * 0.22) return;
+    a.dritta = { x: x0, y: y0 };
+    const [ax, ay] = apAggancia(x0, y0, x1, y1);
+    a.e.p = [r1(x0), r1(y0), r1(ax), r1(ay)];
+    if (navigator.vibrate) try { navigator.vibrate(15); } catch (e) { /* niente */ }
+    disegnaVivo();
+  }
   const r1 = v => Math.round(v * 10) / 10;
   vista.addEventListener('pointermove', ev => {
     if (dita[ev.pointerId]) { dita[ev.pointerId].x = ev.clientX; dita[ev.pointerId].y = ev.clientY; muoviGesto(); return; }
@@ -2915,13 +3062,22 @@ function creaEditor(box, pagina, opz) {
     azione.cx = ev.clientX; azione.cy = ev.clientY;
     const eventi = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [ev];
     const lista = eventi.length ? eventi : [ev];
-    if (azione.tipo === 'tratto') {
+    if (azione.tipo === 'tratto' && azione.dritta) {
+      const q = aPagina(ev.clientX, ev.clientY), d = azione.dritta, [ax, ay] = apAggancia(d.x, d.y, q.x, q.y);
+      azione.e.p = [r1(d.x), r1(d.y), r1(ax), r1(ay)];
+      disegnaVivo();
+    } else if (azione.tipo === 'tratto') {
+      fermoTratto(ev.clientX, ev.clientY);
       const p = azione.e.p;
       lista.forEach(x => {
         const q = aPagina(x.clientX, x.clientY);
         const lx = p[p.length - 2], ly = p[p.length - 1];
         if (Math.abs(q.x - lx) + Math.abs(q.y - ly) >= 0.8 / ed.v.z) p.push(r1(q.x), r1(q.y));
       });
+      disegnaVivo();
+    } else if (azione.tipo === 'forma') {
+      azione.b = aPagina(ev.clientX, ev.clientY);
+      if (Math.hypot(ev.clientX - azione.c0.x, ev.clientY - azione.c0.y) > 4) azione.mosso = true;
       disegnaVivo();
     } else if (azione.tipo === 'gomma' || azione.tipo === 'gommaArea') {
       lista.forEach(x => gommaPunto(aPagina(x.clientX, x.clientY)));
@@ -2971,7 +3127,23 @@ function creaEditor(box, pagina, opz) {
     }
     if (!azione || ev.pointerId !== azione.pid) return;
     const a = azione; azione = null; inUso = false;
+    clearTimeout(a.ft);
     cvv.setTransform(1, 0, 0, 1, 0, 0); cvv.clearRect(0, 0, vivo.width, vivo.height);
+    if (a.tipo === 'forma') {
+      const info = apFormaInfo(a.f);
+      let da = a.a, fino = a.b;
+      if (!a.mosso) {
+        if (!info[3]) { if (ev.type === 'pointerup') toast(info[1] + ' ' + info[2][0].toUpperCase() + info[2].slice(1) + ': trascina per disegnarla'); return; }
+        const l = Math.max(32, Math.min(200, 20 + pref.spessore * 8)) / 2;   // simbolo con un tocco: grandezza dallo spessore
+        da = { x: a.a.x - l, y: a.a.y - l }; fino = { x: a.a.x + l, y: a.a.y + l };
+      }
+      const nuovi = tratti(a.f, da, fino);
+      if (!nuovi.length) return;
+      prima();
+      ed.pagina.el = ed.pagina.el.concat(nuovi);
+      ridisegna(); cambiato();
+      return;
+    }
     if (a.tipo === 'tratto') {
       if (a.e.p.length === 2 && tocco(ev, true)) { return; }
       prima();
@@ -2984,8 +3156,9 @@ function creaEditor(box, pagina, opz) {
       if (a.cambio) cambiato(); else ed.storia.pop();
     } else if (a.tipo === 'lazo') {
       if (a.poli.length < 8) {
-        const e = elementoIn(a.p0);
+        const e = elementoIn(a.p0), cerano = ed.sel.length;
         ed.sel = e ? [e.id] : [];
+        if (!e && !cerano && ev.type === 'pointerup') barraIncolla(a.p0, ev.clientX, ev.clientY);
       } else selezionaCon(a.poli);
       ridisegna();
     } else if (a.tipo === 'muovi') {
@@ -3036,11 +3209,17 @@ function creaEditor(box, pagina, opz) {
     if (!azione) return;
     prepVivo();
     if (azione.tipo === 'tratto') apTratto(cvv, azione.e);
+    if (azione.tipo === 'forma' && azione.mosso) tratti(azione.f, azione.a, azione.b).forEach(e => apTratto(cvv, e));
     if (azione.tipo === 'lazo') {
       cvv.strokeStyle = '#c58af9'; cvv.lineWidth = 1.5 / ed.v.z; cvv.setLineDash([6 / ed.v.z, 5 / ed.v.z]);
       cvv.beginPath(); const p = azione.poli; cvv.moveTo(p[0], p[1]); for (let i = 2; i < p.length; i += 2) cvv.lineTo(p[i], p[i + 1]); cvv.closePath(); cvv.stroke();
       cvv.setLineDash([]);
     }
+  }
+  /** Tratti (elementi) della forma f da a a b, col colore e lo spessore della penna. */
+  function tratti(f, a, b) {
+    const c = pref.colore || colorePenne()[0], s = pref.spessore || 3, piena = pref.riempi && AP_FORME_CHIUSE.indexOf(f) >= 0;
+    return apPuntiForma(f, a, b, s).filter(p => p.length >= 2).map(p => Object.assign({ t: 'tratto', id: nid(), c, s, p }, piena ? { r: 1 } : {}));
   }
   function guidaGomma(q, r) { prepVivo(); cvv.strokeStyle = 'rgba(242,139,130,.9)'; cvv.lineWidth = 1.5 / ed.v.z; cvv.beginPath(); cvv.arc(q.x, q.y, r, 0, Math.PI * 2); cvv.stroke(); }
   function guidaSpazio(y0, dy) {
@@ -3094,6 +3273,8 @@ function creaEditor(box, pagina, opz) {
     if ((ev.ctrlKey || ev.metaKey) && k === 'z') { ev.preventDefault(); ev.shiftKey ? ripeti() : annulla(); }
     else if ((ev.ctrlKey || ev.metaKey) && k === 'y') { ev.preventDefault(); ripeti(); }
     else if ((k === 'delete' || k === 'backspace') && ed.sel.length) { ev.preventDefault(); azioneSel('elimina'); }
+    else if ((ev.ctrlKey || ev.metaKey) && k === 'c' && ed.sel.length) { ev.preventDefault(); azioneSel('copia'); }
+    else if ((ev.ctrlKey || ev.metaKey) && k === 'v' && apLeggiCopiati()) { ev.preventDefault(); incolla(Math.round(ed.v.x + 40 / ed.v.z), Math.round(ed.v.y + 40 / ed.v.z)); }
     else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       const m = { p: 'penna', e: 'evid', t: 'testo', l: 'lazo', g: 'gomma' }[k];
       if (m) scegliStrumento(m);
@@ -3167,7 +3348,43 @@ function creaEditor(box, pagina, opz) {
       scegliStrumento(u.s);
     });
   }
-  $$('.ed-barra [data-str]', box).forEach(b => b.onclick = () => scegliStrumento(b.dataset.str));
+  $$('.ed-barra [data-str]', box).forEach(b => b.onclick = () => {
+    if (b._lungo) { b._lungo = false; return; }
+    scegliStrumento(b.dataset.str);
+    if (b.dataset.str === 'forma') { const f = apFormaInfo(pref.forma || 'freccia'); toast(f[1] + ' ' + f[2] + ' · tieni premuto per un\'altra forma o un simbolo'); }
+  });
+  // v12.6: forme. Un tocco = l'ultima scelta (la sua icona è sul pulsante); tocco lungo = la tendina con forme e simboli.
+  function mostraForma() {
+    const b = $('.ed-barra [data-str="forma"] span', box);
+    if (b) b.textContent = apFormaInfo(pref.forma || 'freccia')[1];
+  }
+  function tendinaForme(btn) {
+    const att = pref.forma || 'freccia', bottone = x => `<button type="button" data-f="${x[0]}" title="${x[2]}" class="${x[0] === att ? 'attivo' : ''}">${x[1]}</button>`;
+    const sf = document.createElement('div');
+    sf.className = 'ap-velo ap-velo-menu';
+    sf.innerHTML = '<div class="ap-menu ed-forme"><small>Forme · trascina</small>' + AP_FORME.filter(x => !x[3]).map(bottone).join('') +
+      '<small>Simboli · tocca o trascina</small>' + AP_FORME.filter(x => x[3]).map(bottone).join('') +
+      `<button type="button" data-riempi="1" class="ed-riempi ${pref.riempi ? 'attivo' : ''}" title="Riempi rettangolo, cerchio, ellisse, triangolo, rombo e stella">${pref.riempi ? '◼ piene' : '◻ vuote'}</button></div>`;
+    box.ownerDocument.body.appendChild(sf);
+    const m = $('.ap-menu', sf), r = btn.getBoundingClientRect();
+    m.style.left = Math.min(innerWidth - m.offsetWidth - 8, Math.max(8, r.left)) + 'px';
+    m.style.top = (r.bottom + m.offsetHeight + 8 > innerHeight ? Math.max(8, r.top - m.offsetHeight - 4) : r.bottom + 4) + 'px';
+    sf.onclick = e => {
+      const rp = e.target.closest('[data-riempi]');
+      if (rp) {   // l'interruttore non chiude la tendina
+        pref.riempi = !pref.riempi; salvaPref();
+        rp.classList.toggle('attivo', !!pref.riempi); rp.textContent = pref.riempi ? '◼ piene' : '◻ vuote';
+        return;
+      }
+      const b = e.target.closest('[data-f]');
+      sf.remove();
+      if (!b) return;
+      pref.forma = b.dataset.f; salvaPref();
+      scegliStrumento('forma'); mostraForma();
+    };
+  }
+  const btnForma = $('.ed-barra [data-str="forma"]', box);
+  if (btnForma) apTieniPremuto(btnForma, () => tendinaForme(btnForma));
   // v12.5: modo (Penna / Dito / Muovi), ricordato su questo dispositivo
   function mostraModo() {
     const m = AP_MODI[apModo()], b = $('.ed-modo', box);
@@ -3193,7 +3410,7 @@ function creaEditor(box, pagina, opz) {
     box.classList.toggle('ed-retro', retro);
     $$('.ed-barra [data-str]', box).forEach(b => b.classList.toggle('attivo', b.dataset.str === ed.strumento));
     barraTesto.hidden = ed.strumento !== 'testo' && !strato.querySelector('.ed-testo:focus');
-    modoStrato(); colori(); vista.dataset.strumento = ed.strumento; mostraModo();
+    modoStrato(); colori(); vista.dataset.strumento = ed.strumento; mostraModo(); mostraForma();
     segnaAltro();
   }
   /** Pallino sullo strumento dell'altro capo della penna (rosso = retro, azzurro = punta), solo in modo Penna. */
@@ -3264,6 +3481,7 @@ function creaEditor(box, pagina, opz) {
   aggiornaBottoneIndice();
   scegliStrumento(opz.soloLettura ? 'lazo' : 'penna');
   ultimi();
+  mostraForma();
   requestAnimationFrame(dimensiona);
   return ed;
 }

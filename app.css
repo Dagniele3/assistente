@@ -737,3 +737,11 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: v
 .ap-vista-grp { padding: 1px; gap: 3px; }
 .ap-vtg { min-height: 30px; min-width: 34px; padding: 1px 8px 1px 7px; font-size: 13px; }
 .ap-vtg .g { font-size: 15px; }
+
+/* v12.6: tendina delle forme e dei simboli (tocco lungo su ◇ forme) */
+.ap-menu.ed-forme { display: grid; grid-template-columns: repeat(4, 48px); gap: 4px; min-width: 0; padding: 8px; }
+.ed-forme small { grid-column: 1 / -1; color: var(--testo-2); font-size: 11px; padding: 2px 4px 0; }
+.ed-forme button { text-align: center; font-size: 22px; min-height: 46px; padding: 0; line-height: 1; }
+.ed-forme button.attivo { background: rgba(138, 180, 248, .18); box-shadow: inset 0 0 0 1.5px var(--accento); }
+.ed-incolla button { font-weight: 600; }
+.ed-forme button.ed-riempi { grid-column: span 3; font-size: 14px; }
