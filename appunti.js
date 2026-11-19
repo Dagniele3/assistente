@@ -14,7 +14,8 @@
  *         { t: 'foto', id, x, y, w, h, f: chiave in foto } ],
  *   foto: { chiave: dataURL } }      coordinate in "punti pagina" (= px CSS con lo zoom al 100 %)
  *
- * Penna: la penna scrive, il dito scorre e fa lo zoom (pointerType); sul PC il mouse scrive con la penna scelta.
+ * Penna: modi (v12.5) Penna = la punta scrive, il retro (pressione bassa) cancella, il dito scorre; Dito = un dito scrive, due
+ * scorrono e fanno lo zoom; Muovi = tutto scorre. Sul PC il mouse scrive con la penna scelta.
  * Prestazioni (Kirin 710A, WebView 114): si disegna solo la parte visibile (riquadro di ogni tratto), niente funzioni recenti.
  */
 'use strict';
@@ -542,7 +543,7 @@ function apPaginaVuota() {
   if (!box) return;
   box.innerHTML = `<div class="ap-vuota"><p>Scegli un appunto a sinistra o scrivine uno nuovo.</p>
     <button type="button" class="primario" id="ap-nuovo2">＋ appunto</button>
-    <p class="piccolo">Sul tablet la penna scrive e il dito scorre; due dita = zoom. Sul PC: tasto T per scrivere con la tastiera, Ctrl + rotellina = zoom.</p></div>`;
+    <p class="piccolo">Pulsante ✍/☝/✋ nella barra: Penna (la punta scrive, il retro cancella, il dito scorre), Dito (un dito scrive, due dita scorrono), Muovi. Due dita = zoom. Sul PC: tasto T per scrivere con la tastiera, Ctrl + rotellina = zoom.</p></div>`;
   $('#ap-nuovo2', box).onclick = () => apNuovo();
 }
 
@@ -1961,14 +1962,37 @@ const ED_STRUMENTI = [
   ['gomma', '⌫', 'gomma'], ['gommaArea', '▭', 'g. area'],
 ];
 
+// v12.5: modi della pagina. [icona, scritta sul pulsante, nome, spiegazione]. Predefinito: Dito sul telefono, Penna altrove.
+const AP_MODI = {
+  penna: ['✍', 'penna', 'Penna', 'punta e retro con scelte loro (barra azzurra o rossa), un dito scorre'],
+  dito: ['☝', 'dito', 'Dito', 'un dito scrive, due dita scorrono e fanno lo zoom'],
+  muovi: ['✋', 'muovi', 'Muovi', 'tutto scorre, niente scrive'],
+};
+function apModo() {
+  const m = LS.get('apModo', null);
+  if (AP_MODI[m]) return m;
+  return Math.min(screen.width, screen.height) < 600 && !window.AssistenteTablet ? 'dito' : 'penna';
+}
+// Il retro della penna (tablet Huawei, 19/11/2026): pressione all'appoggio 0,9–1,5; dito 2,5–6,2. Vale solo se il dispositivo
+// dà pressioni "grezze" (sopra 1 col dito): lo si scopre al primo tocco forte e lo si ricorda (LS "apPressioneAlta").
+const AP_RETRO_MAX = 1.8;
+
 function creaEditor(box, pagina, opz) {
   opz = opz || {};
   const rapido = !!opz.rapido;
   const ed = { pagina: null, v: { x: 0, y: 0, z: 1 }, storia: [], futuro: [], sel: [], strumento: 'penna', rec: null };
-  const pref = LS.get('apPenna', { colore: null, spessore: 3, evColore: '#fdd663', evSpessore: 16, gomma: 14, ultimi: [] });
+  // v12.5: valori mancanti (salvati da versioni vecchie) presi dai predefiniti
+  const pref = Object.assign({ colore: null, spessore: 3, evColore: '#fdd663', evSpessore: 16, gomma: 14, ultimi: [] }, LS.get('apPenna', {}));
+  // v12.5: in modo Penna ci sono due "attrezzi": la PUNTA e il RETRO, ognuno con strumento, colori e spessori suoi. Quello in uso
+  // sta in pref / ed.strumento (la barra mostra lui: azzurro = punta, rosso = retro); l'altro aspetta in "altro". Si scambiano
+  // quando si usa (sulla pagina o sulla barra) l'altro capo della penna. In modo Dito e Muovi c'è solo la punta.
+  let vistaRetro = false;
+  let altro = { s: LS.get('apRetroStr', 'gommaArea'), p: Object.assign({}, pref, LS.get('apPennaRetro', {})) };
+  function salvaPref() { if (vistaRetro) LS.set('apPennaRetro', pref); else LS.set('apPenna', pref); }
   box.innerHTML = `
     <div class="ed-barra" ${opz.soloLettura ? 'hidden' : ''}>
-      <div class="ed-gruppo ed-strumenti">${ED_STRUMENTI.filter(s => !rapido || ['penna', 'evid', 'gomma'].indexOf(s[0]) >= 0)
+      <div class="ed-gruppo ed-modo-g"><button type="button" data-az="modo" class="ed-modo" title="Cosa fanno la penna e il dito"><span></span><small></small></button></div>
+      <div class="ed-gruppo ed-strumenti">${ED_STRUMENTI.filter(s => !rapido || ['penna', 'evid', 'gomma', 'gommaArea'].indexOf(s[0]) >= 0)
         .map(s => `<button type="button" data-str="${s[0]}" title="${s[2]}"><span>${s[1]}</span><small>${s[3] || s[2]}</small></button>`).join('')}</div>
       <div class="ed-gruppo ed-colori"></div>
       <label class="ed-spessore"><small>spessore · <b id="ed-sp-val"></b></small><input type="range" id="ed-sp" min="1" max="40" step="1"></label>
@@ -2595,7 +2619,7 @@ function creaEditor(box, pagina, opz) {
   });
   $('#ed-fs', box).addEventListener('change', () => {
     const t = testoAttivo() || ultimoTesto;
-    pref.fs = Number($('#ed-fs', box).value); LS.set('apPenna', pref);
+    pref.fs = Number($('#ed-fs', box).value); salvaPref();
     if (t && t.e) { prima(); t.e.fs = pref.fs; t.d.closest('.ed-guscio-testo').querySelector('.ed-testo').style.fontSize = pref.fs + 'px'; cambiato(); t.d.focus(); }
   });
   let ultimoTesto = null;
@@ -2741,14 +2765,27 @@ function creaEditor(box, pagina, opz) {
     const nuovi = [];
     ed.pagina.el.forEach(e => {
       if (e.t !== 'tratto') { nuovi.push(e); return; }
-      const b = apRiquadro(e);
-      if (x + r < b.x0 || x - r > b.x1 || y + r < b.y0 || y - r > b.y1) { nuovi.push(e); return; }
-      let pezzo = [], r2 = r * r, tocca = false;
-      const pezzi = [];
+      const b = apRiquadro(e), rr = r + (e.s || 0) / 2;
+      if (x + rr < b.x0 || x - rr > b.x1 || y + rr < b.y0 || y - rr > b.y1) { nuovi.push(e); return; }
+      // v12.5: i punti di un tratto veloce sono radi: vicino alla gomma i segmenti si riempiono di punti fitti, così si
+      // cancella solo dove passa (prima: un punto toccato = via i segmenti interi; passando tra due punti = niente).
+      // Conta anche lo spessore del tratto (rr), così si cancella quello che si vede.
+      const r2 = rr * rr, passo = Math.max(0.6, rr * 0.3), q = [];
       for (let i = 0; i < e.p.length; i += 2) {
-        const dx = e.p[i] - x, dy = e.p[i + 1] - y;
+        q.push(e.p[i], e.p[i + 1]);
+        if (i + 3 >= e.p.length) break;
+        const ax = e.p[i], ay = e.p[i + 1], bx = e.p[i + 2], by = e.p[i + 3], L = Math.hypot(bx - ax, by - ay);
+        if (L > passo && distSeg2(x, y, ax, ay, bx, by) <= r2) {
+          const n = Math.ceil(L / passo);
+          for (let k = 1; k < n; k++) q.push(Math.round((ax + (bx - ax) * k / n) * 10) / 10, Math.round((ay + (by - ay) * k / n) * 10) / 10);
+        }
+      }
+      let pezzo = [], tocca = false;
+      const pezzi = [];
+      for (let i = 0; i < q.length; i += 2) {
+        const dx = q[i] - x, dy = q[i + 1] - y;
         if (dx * dx + dy * dy <= r2) { tocca = true; if (pezzo.length) { pezzi.push(pezzo); pezzo = []; } }
-        else pezzo.push(e.p[i], e.p[i + 1]);
+        else pezzo.push(q[i], q[i + 1]);
       }
       if (pezzo.length) pezzi.push(pezzo);
       if (!tocca) { nuovi.push(e); return; }
@@ -2762,20 +2799,73 @@ function creaEditor(box, pagina, opz) {
   // ── puntatore: la penna (e il mouse) usa lo strumento, il dito scorre e fa lo zoom ──
   const dita = {};
   let gesto = null, azione = null, penneViste = false;
+  // v12.5: la punta della penna è giù / quando si è alzata (i tocchi delle dita lì vicino nel tempo = mano appoggiata)
+  const punta = { giu: false, su: -1e9 };
+  let pressioneAlta = !!LS.get('apPressioneAlta', false);
   function dimDita() { return Object.keys(dita).map(k => dita[k]); }
+  function aggiungiDito(id, x, y, t) {
+    dita[id] = { x, y, t0: t, x0: x, y0: y };
+    try { vista.setPointerCapture(id); } catch (e) { /* niente */ }
+    iniziaGesto();
+  }
+  // Azione partita da un dito (modo Dito o retro della penna) da chiudere: "tieni" = la gomma resta fatta (arriva la penna),
+  // altrimenti si torna a prima (arriva un secondo dito: era l'inizio di uno scorrimento, non un segno).
+  const conPrima = { gomma: 1, gommaArea: 1, muovi: 1, ridim: 1, spazio: 1 };
+  function chiudiAzioneDito(tieni) {
+    const a = azione;
+    if (!a || !a.dito) return null;
+    azione = null; inUso = false;
+    cvv.setTransform(1, 0, 0, 1, 0, 0); cvv.clearRect(0, 0, vivo.width, vivo.height);
+    if (conPrima[a.tipo]) {   // prima() ha messo da parte la pagina com'era
+      if (!tieni) { ripristina(ed.storia.pop()); montaTesti(); }
+      else if (a.cambio || a.mosso || a.dy || a.tipo === 'ridim') cambiato();
+      else ed.storia.pop();
+    }
+    ridisegna();
+    return a;
+  }
   vista.addEventListener('pointerdown', ev => {
     if (ev.target.closest('.ed-barra-sel,.ed-barretta,.ed-indice,.ed-fumetto')) return;
     const fl = ev.target.closest('.ed-tit-fl');
     if (fl && ev.pointerType !== 'pen') { ev.preventDefault(); menuTitoletto(fl.dataset.id); return; }
     const suTesto = ev.target.closest('.ed-guscio-testo');
+    const modo = apModo(), scrive = !opz.soloLettura;
+    if (modo !== 'penna' && vistaRetro) attrezzo(false);
+    let forza = null, daDito = false;
     if (ev.pointerType === 'touch') {
+      if (ev.pressure > 2 && !pressioneAlta) { pressioneAlta = true; LS.set('apPressioneAlta', true); }
       if (suTesto && ed.strumento === 'testo') return;   // il dito sulla casella: la tastiera la gestisce lei
-      dita[ev.pointerId] = { x: ev.clientX, y: ev.clientY, t0: ev.timeStamp, x0: ev.clientX, y0: ev.clientY };
-      try { vista.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
-      iniziaGesto();
-      return;
+      let ruolo = 'scorre';
+      if (modo === 'penna' && scrive) {
+        // mano sulla pagina: mentre la punta scrive (e mezzo secondo dopo), o contatto molto largo (misure del tablet)
+        if (punta.giu || ev.timeStamp - punta.su < 500 || (pressioneAlta && (ev.width > 12 || ev.height > 12))) ruolo = 'ignora';
+        else if (azione && azione.dito) ruolo = 'ignora';   // mentre il retro cancella, la mano non conta
+        // retro: pressione bassa e contatto piccolo (anche col palmo già appoggiato: il palmo smette di scorrere)
+        else if (pressioneAlta && ev.pressure > 0 && ev.pressure < AP_RETRO_MAX && ev.width <= 8 && ev.height <= 8 && !azione) {
+          ruolo = 'retro';
+          Object.keys(dita).forEach(k => delete dita[k]); gesto = null;
+        }
+      } else if (modo === 'dito' && scrive && ed.strumento !== 'testo') {
+        if (azione && azione.dito) {   // secondo dito: niente segno, si scorre / zoom con tutte e due
+          const a = chiudiAzioneDito(false);
+          aggiungiDito(a.pid, a.cx, a.cy, ev.timeStamp);
+        } else if (!azione && !dimDita().length) ruolo = 'scrive';
+      }
+      if (ruolo === 'ignora') { ev.preventDefault(); return; }
+      if (ruolo === 'scorre') { aggiungiDito(ev.pointerId, ev.clientX, ev.clientY, ev.timeStamp); return; }
+      if (ruolo === 'retro') attrezzo(true);   // il retro usa le sue scelte (la barra diventa rossa)
+      daDito = true;
     }
-    if (ev.pointerType === 'pen') penneViste = true;
+    if (modo === 'muovi' && (ev.pointerType === 'pen' || (ev.pointerType === 'mouse' && ev.button === 0))) {
+      ev.preventDefault(); aggiungiDito(ev.pointerId, ev.clientX, ev.clientY, ev.timeStamp); return;
+    }
+    if (ev.pointerType === 'pen') {
+      penneViste = true;
+      punta.giu = true;
+      attrezzo(false);
+      chiudiAzioneDito(true);
+      Object.keys(dita).forEach(k => delete dita[k]); gesto = null;   // la penna vince sulla mano appoggiata
+    }
     if (ev.button === 1 || (ev.pointerType === 'mouse' && ev.button === 2)) {   // tasto centrale / destro del mouse = scorre
       ev.preventDefault();
       dita[ev.pointerId] = { x: ev.clientX, y: ev.clientY, t0: ev.timeStamp, x0: ev.clientX, y0: ev.clientY };
@@ -2792,7 +2882,7 @@ function creaEditor(box, pagina, opz) {
     vista.focus({ preventScroll: true });
     try { vista.setPointerCapture(ev.pointerId); } catch (e) { /* niente */ }
     const p = aPagina(ev.clientX, ev.clientY);
-    const str = (ev.buttons & 32) ? 'gomma' : ed.strumento;   // tasto gomma della penna
+    const str = forza || ((ev.buttons & 32) ? 'gomma' : ed.strumento);   // retro della penna / tasto gomma della penna
     inUso = true;
     if (str === 'penna' || str === 'evid') {
       const ev2 = str === 'evid';
@@ -2816,11 +2906,13 @@ function creaEditor(box, pagina, opz) {
       prima(sotto);
       azione = { tipo: 'spazio', y0: p.y, dy: 0, sotto, tit: titoletti().filter(t => t.y >= p.y).map(t => t.id) };
     }
+    if (azione) { azione.pid = ev.pointerId; azione.dito = daDito; azione.cx = ev.clientX; azione.cy = ev.clientY; }
   });
   const r1 = v => Math.round(v * 10) / 10;
   vista.addEventListener('pointermove', ev => {
     if (dita[ev.pointerId]) { dita[ev.pointerId].x = ev.clientX; dita[ev.pointerId].y = ev.clientY; muoviGesto(); return; }
-    if (!azione) return;
+    if (!azione || ev.pointerId !== azione.pid) return;   // v12.5: solo il puntatore che ha iniziato (la mano ignorata no)
+    azione.cx = ev.clientX; azione.cy = ev.clientY;
     const eventi = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [ev];
     const lista = eventi.length ? eventi : [ev];
     if (azione.tipo === 'tratto') {
@@ -2877,7 +2969,7 @@ function creaEditor(box, pagina, opz) {
       iniziaGesto();
       return;
     }
-    if (!azione) return;
+    if (!azione || ev.pointerId !== azione.pid) return;
     const a = azione; azione = null; inUso = false;
     cvv.setTransform(1, 0, 0, 1, 0, 0); cvv.clearRect(0, 0, vivo.width, vivo.height);
     if (a.tipo === 'tratto') {
@@ -2906,8 +2998,9 @@ function creaEditor(box, pagina, opz) {
       if (!(e && e.t === 'testo')) nuovoTesto(a.p0.x, a.p0.y);
     } else if (a.tipo === 'spazio') { if (a.dy) cambiato(); else ed.storia.pop(); ridisegna(); }
   }
-  vista.addEventListener('pointerup', finePuntatore);
-  vista.addEventListener('pointercancel', finePuntatore);
+  const fineBis = ev => { if (ev.pointerType === 'pen') { punta.giu = false; punta.su = ev.timeStamp; } finePuntatore(ev); };
+  vista.addEventListener('pointerup', fineBis);
+  vista.addEventListener('pointercancel', fineBis);
   vista.addEventListener('contextmenu', ev => ev.preventDefault());
 
   /** Tocco breve: spunta una casella o (in modalità testo, col dito) crea una casella di testo. */
@@ -3036,13 +3129,13 @@ function creaEditor(box, pagina, opz) {
   function impostaColore(c) {
     if (ed.strumento === 'evid') pref.evColore = c; else pref.colore = c;
     if (['lazo', 'gomma', 'gommaArea', 'spazio', 'testo'].indexOf(ed.strumento) >= 0 && !ed.sel.length) scegliStrumento('penna');
-    LS.set('apPenna', pref); colori();
+    salvaPref(); colori();
   }
   $('#ed-sp', box).oninput = () => {
     const v = Number($('#ed-sp', box).value);
     if (ed.strumento === 'evid') pref.evSpessore = v; else if (ed.strumento === 'gommaArea') pref.gomma = v; else pref.spessore = v;
     $('#ed-sp-val', box).textContent = v + ' px';
-    LS.set('apPenna', pref);
+    salvaPref();
   };
   function scegliStrumento(s) {
     ed.strumento = s;
@@ -3052,6 +3145,8 @@ function creaEditor(box, pagina, opz) {
     modoStrato();
     colori();
     vista.dataset.strumento = s;
+    if (vistaRetro) LS.set('apRetroStr', s);
+    segnaAltro();
   }
   ed.scegliStrumento = scegliStrumento;
   function modoStrato() { strato.classList.toggle('ed-testi-attivi', ed.strumento === 'testo'); }
@@ -3059,7 +3154,7 @@ function creaEditor(box, pagina, opz) {
     if (rapido) return;
     const u = { s: ed.strumento, c: ed.strumento === 'evid' ? pref.evColore : (pref.colore || colorePenne()[0]), w: ed.strumento === 'evid' ? pref.evSpessore : pref.spessore };
     pref.ultimi = [u].concat((pref.ultimi || []).filter(x => !(x.s === u.s && x.c === u.c && x.w === u.w))).slice(0, 3);
-    LS.set('apPenna', pref);
+    salvaPref();
     ultimi();
   }
   function ultimi() {
@@ -3073,6 +3168,53 @@ function creaEditor(box, pagina, opz) {
     });
   }
   $$('.ed-barra [data-str]', box).forEach(b => b.onclick = () => scegliStrumento(b.dataset.str));
+  // v12.5: modo (Penna / Dito / Muovi), ricordato su questo dispositivo
+  function mostraModo() {
+    const m = AP_MODI[apModo()], b = $('.ed-modo', box);
+    if (!b) return;
+    b.querySelector('span').textContent = m[0]; b.querySelector('small').textContent = vistaRetro ? 'retro' : m[1];
+    vista.dataset.modo = apModo();
+  }
+  // Un tocco sul pulsante = modo successivo (Penna → Dito → Muovi), con una scritta per un attimo.
+  function sceltaModo() {
+    const k = Object.keys(AP_MODI), nuovo = k[(k.indexOf(apModo()) + 1) % k.length];
+    LS.set('apModo', nuovo);
+    if (nuovo !== 'penna') attrezzo(false);
+    mostraModo(); segnaAltro();
+    toast(AP_MODI[nuovo][0] + ' ' + AP_MODI[nuovo][2] + ': ' + AP_MODI[nuovo][3]);
+  }
+  /** Scambia punta e retro (retro = true: la barra mostra e cambia le scelte del retro, in rosso). */
+  function attrezzo(retro) {
+    if (retro === vistaRetro) return;
+    const ora = { s: ed.strumento, p: Object.assign({}, pref) };
+    Object.keys(pref).forEach(x => { if (x !== 'ultimi') delete pref[x]; });
+    Object.assign(pref, altro.p, { ultimi: pref.ultimi });
+    ed.strumento = altro.s; altro = ora; vistaRetro = retro;
+    box.classList.toggle('ed-retro', retro);
+    $$('.ed-barra [data-str]', box).forEach(b => b.classList.toggle('attivo', b.dataset.str === ed.strumento));
+    barraTesto.hidden = ed.strumento !== 'testo' && !strato.querySelector('.ed-testo:focus');
+    modoStrato(); colori(); vista.dataset.strumento = ed.strumento; mostraModo();
+    segnaAltro();
+  }
+  /** Pallino sullo strumento dell'altro capo della penna (rosso = retro, azzurro = punta), solo in modo Penna. */
+  function segnaAltro() {
+    const si = apModo() === 'penna';
+    $$('.ed-barra [data-str]', box).forEach(b => b.classList.toggle('altro', si && b.dataset.str === altro.s));
+  }
+  // Barra toccata col retro (pressione bassa) = scelte del retro; con la punta = scelte della punta. Il dito cambia quelle mostrate.
+  $('.ed-barra', box).addEventListener('pointerdown', ev => {
+    if (apModo() !== 'penna') return;
+    let retro = null;
+    if (ev.pointerType === 'pen') retro = false;
+    else if (ev.pointerType === 'touch' && pressioneAlta && ev.pressure > 0 && ev.pressure < AP_RETRO_MAX && ev.width <= 8 && ev.height <= 8) retro = true;
+    if (retro === null || retro === vistaRetro) return;
+    attrezzo(retro);
+    // i pallini dei colori sono stati ridisegnati: il tocco su un colore vale per l'attrezzo appena scelto
+    const c = ev.target.closest && ev.target.closest('[data-c]');
+    if (c) impostaColore(c.dataset.c);
+  }, true);
+  ed.mostraModo = mostraModo;
+  mostraModo();
   // v12.3: se la riga non ci sta (orizzontale con Sezioni aperto) scorre di lato; sfumatura e › finché c'è altro a destra
   const barraUna = $('.ed-barra', box);
   if (barraUna) {
@@ -3085,6 +3227,7 @@ function creaEditor(box, pagina, opz) {
     const a = b.dataset.az;
     if (a === 'annulla') annulla();
     if (a === 'ripeti') ripeti();
+    if (a === 'modo') sceltaModo();
     if (a === 'indice') ed.impostaIndice(!ed.indiceAperto);
     if (a === 'titoletto') nuovoTitoletto(null);
     if (a === 'foto') $('#ed-file', box).click();
