@@ -1652,7 +1652,7 @@ function apRiquadro(e) {
   }
   return e._bb;
 }
-function apTogliRiquadro(e) { if (e && e._bb) e._bb = null; if (e && e._j) e._j = null; }
+function apTogliRiquadro(e) { if (e && e._bb) e._bb = null; if (e && e._j) e._j = null; if (e && e._im) e._im = null; }
 /** JSON di un elemento; tratti e foto lo tengono pronto (si azzera quando cambiano: apTogliRiquadro, arrotonda). */
 function apJsonEl(e) {
   if (e.t === 'testo') return JSON.stringify(e);
@@ -1677,6 +1677,48 @@ function apSfondo(c, sfondo, x0, y0, x1, y1) {
 }
 
 function apTratto(c, e) {
+  if ((e.g && e.g.length) || (e.b && e.b.length)) { apTrattoBucato(c, e); return; }
+  apTrattoPieno(c, e);
+}
+// v12.9: gomma a zona precisa sulle forme riempite, sui tratti grossi e sull'evidenziatore. Ogni passata è una riga
+// g = [[raggio, x0, y0, x1, y1, …], …] (le v12.8 avevano cerchi b = [x, y, raggio, …]). Il tratto si disegna UNA volta in
+// un'immagine in memoria (e._im, alla scala attuale), le passate la bucano (destination-out); poi si incolla e basta.
+// Prima: un ritaglio per ogni buco a ogni disegno = lentissimo.
+const AP_IM_MAX = 4096;
+const AP_GOMMA_BUCA = 6;   // da questo spessore in su la gomma a zona buca il tratto invece di tagliarlo
+function apTrattoBucato(c, e) {
+  const bb = apRiquadro(e), m = c.getTransform ? c.getTransform() : { a: 1, b: 0 };
+  const w = bb.x1 - bb.x0, h = bb.y1 - bb.y0;
+  if (w <= 0 || h <= 0) return;
+  let k = Math.hypot(m.a, m.b) || 1;
+  if (w * k > AP_IM_MAX || h * k > AP_IM_MAX) k = AP_IM_MAX / Math.max(w, h);
+  let im = e._im;
+  if (!im || Math.abs(im.k / k - 1) > 0.03) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.ceil(w * k)); cv.height = Math.max(1, Math.ceil(h * k));
+    const o = cv.getContext('2d');
+    o.setTransform(k, 0, 0, k, -bb.x0 * k, -bb.y0 * k);
+    apTrattoPieno(o, e);
+    o.globalCompositeOperation = 'destination-out'; o.globalAlpha = 1;
+    o.strokeStyle = o.fillStyle = '#000'; o.lineCap = 'round'; o.lineJoin = 'round';
+    apPassate(e).forEach(q => {
+      if (q.length <= 3) { o.beginPath(); o.arc(q[1], q[2], q[0], 0, Math.PI * 2); o.fill(); return; }
+      o.lineWidth = q[0] * 2; o.beginPath(); o.moveTo(q[1], q[2]);
+      for (let i = 3; i < q.length; i += 2) o.lineTo(q[i], q[i + 1]);
+      o.stroke();
+    });
+    im = { k, cv };
+    Object.defineProperty(e, '_im', { value: im, writable: true, enumerable: false, configurable: true });
+  }
+  c.drawImage(im.cv, bb.x0, bb.y0, im.cv.width / im.k, im.cv.height / im.k);
+}
+/** Passate della gomma di un tratto (anche i cerchi b della v12.8, come passate di un punto). */
+function apPassate(e) {
+  const g = (e.g || []).slice();
+  if (e.b) for (let i = 0; i < e.b.length; i += 3) g.push([e.b[i + 2], e.b[i], e.b[i + 1]]);
+  return g;
+}
+function apTrattoPieno(c, e) {
   const p = e.p;
   c.strokeStyle = e.c; c.fillStyle = e.c;
   c.globalAlpha = e.ev ? 0.38 : 1;
@@ -1687,19 +1729,7 @@ function apTratto(c, e) {
   } else {
     apPercorso(c, p);
     if (e.r) {   // v12.6: r 1 = velata, 2 = piena
-      c.save();
-      // v12.8: buchi della gomma a zona (b = [x, y, raggio, …]): un ritaglio per buco (riquadro meno il cerchio), uno dopo l'altro
-      if (e.b && e.b.length) {
-        const bb = apRiquadro(e);
-        for (let i = 0; i < e.b.length; i += 3) {
-          c.beginPath(); c.rect(bb.x0 - 2, bb.y0 - 2, bb.x1 - bb.x0 + 4, bb.y1 - bb.y0 + 4);
-          c.moveTo(e.b[i] + e.b[i + 2], e.b[i + 1]); c.arc(e.b[i], e.b[i + 1], e.b[i + 2], 0, Math.PI * 2, true);
-          c.clip();
-        }
-        apPercorso(c, p);
-      }
       c.globalAlpha = e.r === 2 ? 1 : 0.25; c.fill();
-      c.restore();
       c.globalAlpha = e.ev ? 0.38 : 1;
     }
     if (!e.sb) c.stroke();   // v12.8: sb = solo l'interno (il bordo è un tratto a parte)
@@ -2274,7 +2304,7 @@ function creaEditor(box, pagina, opz) {
     ed.pagina.titoletti = JSON.parse(s.tit);
     ed.muta = true;
   }
-  function clona(e) { const c = Object.assign({}, e); if (e.p) c.p = e.p.slice(); if (e.b) c.b = e.b.slice(); return c; }
+  function clona(e) { const c = Object.assign({}, e); if (e.p) c.p = e.p.slice(); if (e.b) c.b = e.b.slice(); if (e.g) c.g = e.g.map(q => q.slice()); return c; }
   function prima(ids) {
     ed.storia.push(istantanea());
     if (ed.storia.length > 60) ed.storia.shift();
@@ -2846,6 +2876,7 @@ function creaEditor(box, pagina, opz) {
     if (e.t === 'tratto') {
       for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; }
       if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] += dx; e.b[i + 1] += dy; }   // v12.8: buchi della gomma a zona
+      if (e.g) e.g.forEach(q => { for (let i = 1; i < q.length; i += 2) { q[i] += dx; q[i + 1] += dy; } });   // v12.9: passate
       apTogliRiquadro(e);
     }
     else { e.x += dx; e.y += dy; }
@@ -2853,10 +2884,11 @@ function creaEditor(box, pagina, opz) {
   function scala(e, ox, oy, k) {
     if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] = ox + (e.p[i] - ox) * k; e.p[i + 1] = oy + (e.p[i + 1] - oy) * k; } e.s = Math.max(1, e.s * k);
       if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] = ox + (e.b[i] - ox) * k; e.b[i + 1] = oy + (e.b[i + 1] - oy) * k; e.b[i + 2] *= k; }
+      if (e.g) e.g.forEach(q => { q[0] *= k; for (let i = 1; i < q.length; i += 2) { q[i] = ox + (q[i] - ox) * k; q[i + 1] = oy + (q[i + 1] - oy) * k; } });
       apTogliRiquadro(e); }
     else { e.x = ox + (e.x - ox) * k; e.y = oy + (e.y - oy) * k; e.w = Math.max(40, e.w * k); if (e.t === 'foto') e.h = e.h * k; if (e.t === 'testo') e.fs = Math.max(10, Math.round((e.fs || 18) * k)); }
   }
-  function arrotonda(e) { apTogliRiquadro(e); if (e.t === 'tratto') { e.p = e.p.map(v => Math.round(v * 10) / 10); if (e.b) e.b = e.b.map(v => Math.round(v * 10) / 10); } else { e.x = Math.round(e.x); e.y = Math.round(e.y); e.w = Math.round(e.w); if (e.h) e.h = Math.round(e.h); } }
+  function arrotonda(e) { apTogliRiquadro(e); if (e.t === 'tratto') { e.p = e.p.map(v => Math.round(v * 10) / 10); if (e.b) e.b = e.b.map(v => Math.round(v * 10) / 10); if (e.g) e.g = e.g.map(q => q.map(v => Math.round(v * 10) / 10)); } else { e.x = Math.round(e.x); e.y = Math.round(e.y); e.w = Math.round(e.w); if (e.h) e.h = Math.round(e.h); } }
   function dentroPoligono(x, y, poli) {
     let dentro = false;
     for (let i = 0, j = poli.length - 2; i < poli.length; j = i, i += 2) {
@@ -2925,26 +2957,25 @@ function creaEditor(box, pagina, opz) {
       if (e.t !== 'tratto') { nuovi.push(e); return; }
       const b = apRiquadro(e), rr = r + (e.s || 0) / 2;
       if (x + rr < b.x0 || x - rr > b.x1 || y + rr < b.y0 || y - rr > b.y1) { nuovi.push(e); return; }
-      // v12.8: interno delle forme. Solo interno (sb): ci si fa un buco. Forma intera (bordo + interno) toccata: si divide in
-      // interno (col buco, sotto) e bordo (senza riempimento, che poi si taglia come un tratto normale).
-      // Sempre oggetti nuovi: quelli vecchi possono essere nella storia di annulla.
-      const buco = f => {
-        const h = (f.b || []).slice(), n = h.length;
-        if (n && Math.hypot(h[n - 3] - x, h[n - 2] - y) < r * 0.3 && Math.abs(h[n - 1] - r) < 0.5) return f.b;   // quasi uguale all'ultimo
-        h.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(r * 10) / 10);
-        return h;
-      };
-      if (e.r && e.sb) {
-        if (vicinoATratto(e, x, y, r) || dentroPoligono(x, y, e.p)) {
-          const b2 = buco(e);
-          if (b2 !== e.b) { nuovi.push(Object.assign({}, e, { b: b2 })); cambio = true; return; }
+      // v12.9: forme riempite, tratti grossi ed evidenziatore: la gomma li buca (passate g, disegno in memoria) invece di
+      // tagliarli: precisa (non taglia tutta la larghezza sfiorando il bordo) e veloce. Una passata per trascinamento: gli
+      // oggetti copiati in questo trascinamento (a.miei) si allungano sul posto; gli altri si copiano (la storia di annulla
+      // tiene quelli vecchi).
+      if (e.r || e.g || e.b || e.ev || (e.s || 0) >= AP_GOMMA_BUCA) {
+        if (!(vicinoATratto(e, x, y, r) || (e.r && e.p.length >= 6 && dentroPoligono(x, y, e.p)))) { nuovi.push(e); return; }
+        const a = azione && azione.tipo === 'gommaArea' ? azione : { miei: new Set() };
+        if (!a.miei) a.miei = new Set();
+        let f = e;
+        if (!a.miei.has(e)) {
+          f = Object.assign({}, e, { g: apPassate(e).map(q => q.slice()) });
+          delete f.b;
+          a.miei.add(f);
         }
-        nuovi.push(e); return;
-      }
-      if (e.r && e.p.length >= 6 && (vicinoATratto(e, x, y, r) || dentroPoligono(x, y, e.p))) {
-        nuovi.push(Object.assign({}, e, { id: nid(), sb: 1, b: buco(e) }));
-        e = Object.assign({}, e, { id: nid() }); delete e.r; delete e.b;
-        cambio = true;
+        let q = f._pas;
+        if (!q) { q = [r1(r)]; f.g.push(q); Object.defineProperty(f, '_pas', { value: q, writable: true, enumerable: false, configurable: true }); }
+        const n = q.length;
+        if (n < 3 || Math.hypot(q[n - 2] - x, q[n - 1] - y) > r * 0.2) { q.push(r1(x), r1(y)); apTogliRiquadro(f); cambio = true; }
+        nuovi.push(f); return;
       }
       // v12.5: i punti di un tratto veloce sono radi: vicino alla gomma i segmenti si riempiono di punti fitti, così si
       // cancella solo dove passa (prima: un punto toccato = via i segmenti interi; passando tra due punti = niente).
@@ -3645,7 +3676,7 @@ function apSpostaSelezione(elementi, foto, togli) {
       const dy = (p.el.length ? L.h : 40) - y0, dx = 40 - x0;
       elementi.forEach(e => {
         e.id = Math.random().toString(36).slice(2, 9);
-        if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; } if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] += dx; e.b[i + 1] += dy; } } else { e.x += dx; e.y += dy; }
+        if (e.t === 'tratto') { for (let i = 0; i < e.p.length; i += 2) { e.p[i] += dx; e.p[i + 1] += dy; } if (e.b) for (let i = 0; i < e.b.length; i += 3) { e.b[i] += dx; e.b[i + 1] += dy; } if (e.g) e.g.forEach(q => { for (let i = 1; i < q.length; i += 2) { q[i] += dx; q[i + 1] += dy; } }); } else { e.x += dx; e.y += dy; }
         p.el.push(e);
       });
       Object.assign(p.foto, fotoUsate);
