@@ -25,7 +25,7 @@ let dati = LS.get('dati', null);
 let coda = LS.get('coda', []);
 let statoSync = { stato: 'idle', ultimo: LS.get('ultimoSync', null), errore: '' };
 
-const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti', 'Salute', 'Attività', 'Uscite', 'Appunti', 'Sezioni appunti'];
+const SCHEDE = ['Movimenti', 'Scheda', 'Log', 'Scadenze', 'Spesa', 'Pasti', 'Peso', 'Quaderno', 'Bollette', 'Alimenti', 'Salute', 'Attività', 'Uscite', 'Appunti', 'Sezioni appunti', 'Mobilità', 'Diario mobilità'];
 // v11: le righe degli Appunti si inviano solo allo script v11 (quello vecchio le scarterebbe): fino ad allora restano in coda.
 const SCHEDE_V11 = ['Appunti', 'Sezioni appunti'];
 function script11() { return Number((dati && dati.versione) || 0) >= 11; }
@@ -351,7 +351,7 @@ function pastiOggi() {
 
 const VISTE = {
   '': vistaHome, finanze: vistaFinanze, movimenti: vistaMovimenti, budget: vistaBudget, bollette: vistaBollette, mutuo: vistaMutuo, scadenze: vistaScadenze, spesa: vistaSpesa,
-  allenamento: vistaAllenamento, scheda: vistaScheda, progressi: vistaProgressi,
+  allenamento: vistaAllenamento, scheda: vistaScheda, progressi: vistaProgressi, mobilita: vistaMobilita, // v16
   cibo: vistaCibo, dieta: vistaCibo, piano: vistaPiano, controlli: vistaControlli, peso: vistaPeso, impostazioni: main => vistaImpostazioni(main, false),
   fuori: vistaFuori, uscita: vistaUscita, anno: vistaAnnoFuori, vola: vistaSiVola, // v8
   tranquillita: vistaTranquillita, // v10
@@ -1736,7 +1736,279 @@ function collegaListe(main, lista, liste) {
 // Scheda: dati della scheda (Parametri) e settimana tipo; esercizi per giorno nella scheda "Scheda" (Ordine = posizione).
 // Progressi: costanza, volume settimanale, carico per esercizio, esercizi fermi.
 
-const SCHEDE_ALL = [['allenamento', 'Oggi'], ['scheda', 'Scheda'], ['progressi', 'Progressi']];
+// ───────────────────────── Mobilità (v16, SPEC-v16) ─────────────────────────
+// Routine guidate fuori dall'allenamento: scheda "Mobilità" (Routine, Ordine, Esercizio, Dose, Unità, Indicazione) e
+// "Diario mobilità" (una riga per routine al giorno, ID = "MOB-" + data + "-" + routine). Conta solo se completa al 100%.
+// Routine del giorno: Lunga nel "Giorno mobilità lunga", Breve negli altri (la Lunga completa vale anche come Breve).
+// Il Riscaldamento usa lo stesso motore ma non conta per pallini e giorni di fila. Niente righe in Scheda né in Log.
+
+const UNITA_ALL = ['rip', 'rip/lato', 's', 's/lato', 'min'];
+const GIORNI_MOB = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
+const ORDINE_ROUTINE = ['Breve', 'Lunga', 'Riscaldamento'];
+const statoMob = { modifica: '', guidata: null };
+
+/** Ripetizioni anche come intervallo ("8-12", "30-45"): il numero più basso (0 se non c'è). */
+function ripMin(v) { const m = String(v == null ? '' : v).match(/\d+(?:[.,]\d+)?/); return m ? Number(m[0].replace(',', '.')) : 0; }
+/** 2 se l'esercizio della Scheda è "per lato" (le ripetizioni scritte valgono per lato). */
+function latiDi(nome) { const e = righe('Scheda').find(x => normalizza(x.Esercizio) === normalizza(nome)); return e && /\/lato/.test(String(e['Unità'] || '')) ? 2 : 1; }
+
+function routineMob(nome) {
+  return righe('Mobilità').filter(x => normalizza(x.Routine) === normalizza(nome) && String(x.Esercizio || '').trim()).sort((a, b) => n(a.Ordine) - n(b.Ordine));
+}
+function nomiRoutine() {
+  const nomi = [...new Set(righe('Mobilità').map(x => String(x.Routine || '').trim()).filter(Boolean))];
+  return ORDINE_ROUTINE.filter(r => nomi.some(x => normalizza(x) === normalizza(r))).concat(nomi.filter(x => ORDINE_ROUTINE.every(r => normalizza(r) !== normalizza(x))));
+}
+function routineDiOggi(d) {
+  const g = normalizza(par('Giorno mobilità lunga') || 'mer').slice(0, 3);
+  return GIORNI_MOB[(d || new Date()).getDay()] === g ? 'Lunga' : 'Breve';
+}
+function idDiarioMob(k, routine) { return 'MOB-' + k + '-' + normalizza(routine); }
+function rigaDiario(k, routine) { return righe('Diario mobilità').find(x => x.ID === idDiarioMob(k, routine) || (String(x.Data).slice(0, 10) === k && normalizza(x.Routine) === normalizza(routine))); }
+function completa(r) { return !!r && (r.Completa === true || r.Completa === 'true'); }
+/** Giorno con Breve o Lunga completa (il Riscaldamento non conta). */
+function mobFatta(k) { return completa(rigaDiario(k, 'Breve')) || completa(rigaDiario(k, 'Lunga')); }
+function minutiRoutine(v) {
+  return Math.round(v.reduce((t, x) => {
+    const u = String(x['Unità'] || 'rip'), lati = /\/lato/.test(u) ? 2 : 1;
+    return t + (u.indexOf('s') === 0 ? n(x.Dose) : u === 'min' ? n(x.Dose) * 60 : n(x.Dose) * 4) * lati + (lati === 2 ? 5 : 0) + 10;
+  }, 0) / 60);
+}
+function doseTesto(x) { const u = String(x['Unità'] || 'rip'); return n(x.Dose) + ' ' + (u === 's' ? 's' : u); }
+
+/** Avanzamento di oggi (spunte), tenuto in questo dispositivo finché la routine non è finita. */
+function sessioneMob(routine) {
+  const k = oggiK();
+  const chiaveS = k + '|' + normalizza(routine);
+  // si rilegge ogni volta (la guidata e la lista scrivono la stessa sessione)
+  return { get: () => ((LS.get('mobSessioni', {}) || {})[chiaveS] || { fatti: {} }), set: s => { const t = LS.get('mobSessioni', {}) || {}; Object.keys(t).forEach(x => { if (x.slice(0, 10) !== k) delete t[x]; }); t[chiaveS] = s; LS.set('mobSessioni', t); } };
+}
+
+/** Salva la riga del Diario mobilità di oggi per la routine (completa resta completa). */
+function salvaDiarioMob(routine, fatti, totali, minuti) {
+  const k = oggiK(), prima = rigaDiario(k, routine), giaCompleta = completa(prima);
+  const ok = giaCompleta || (totali > 0 && fatti >= totali);
+  salva('Diario mobilità', { 'Data': k, 'Routine': routine, 'Fatti': Math.max(fatti, prima ? n(prima.Fatti) : 0), 'Totali': totali, 'Minuti': minuti, 'Completa': ok }, prima ? prima.ID : idDiarioMob(k, routine));
+  if (tablet) try { tablet.aggiornaWidget(); } catch (e) { /* app vecchia */ }
+  return ok;
+}
+
+function vistaMobilita(main, query) {
+  const k = oggiK(), nome = routineDiOggi(), voci = routineMob(nome), ses = sessioneMob(nome), s = ses.get();
+  const fattiN = voci.filter(x => s.fatti[x.ID]).length, fatta = completa(rigaDiario(k, nome)) || (nome === 'Breve' && completa(rigaDiario(k, 'Lunga')));
+  const obiettivo = numPar('Mobilità a settimana (obiettivo)', 6);
+  const oggiD = daChiave(k), lun = spostaGiorni(k, -((oggiD.getDay() + 6) % 7));
+  const sett = [0, 1, 2, 3, 4, 5, 6].map(i => spostaGiorni(lun, i));
+  let fila = 0;
+  for (let i = mobFatta(k) ? 0 : 1; i < 400 && mobFatta(spostaGiorni(k, -i)); i++) fila++;
+  const pall = sett.map((g, i) => `<span class="mob-pallino ${mobFatta(g) ? 'pieno' : ''} ${g === k ? 'oggi' : ''}"><b>${'LMMGVSD'[i]}</b></span>`).join('');
+  const nomi = nomiRoutine();
+
+  let modifica = '';
+  if (statoMob.modifica) {
+    const r = statoMob.modifica, vv = routineMob(r);
+    modifica = `<div class="carta" style="margin-top:12px"><div class="budget-testa"><span class="etichetta" style="margin:0">✎ ${esc(r)}</span><button type="button" class="piccolo-b" id="mob-chiudi">Fatto ✓</button></div>
+      <ul class="elenco mob-modifica">${vv.map((x, i) => `<li data-id="${esc(x.ID)}">
+        <div class="mob-campi"><input data-mcampo="Esercizio" value="${esc(x.Esercizio)}" aria-label="Esercizio">
+          <input class="corto" data-mcampo="Dose" value="${esc(x.Dose)}" inputmode="numeric" aria-label="Dose">
+          <select class="corto" data-mcampo="Unità" aria-label="Unità">${UNITA_ALL.map(u => `<option ${String(x['Unità'] || 'rip') === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
+          <input class="largo" data-mcampo="Indicazione" value="${esc(x.Indicazione || '')}" placeholder="indicazione di una riga" aria-label="Indicazione"></div>
+        <span class="mob-ordine"><button type="button" class="piccolo-b" data-su="${i}" ${i ? '' : 'disabled'} aria-label="Su">↑</button><button type="button" class="piccolo-b" data-giu="${i}" ${i < vv.length - 1 ? '' : 'disabled'} aria-label="Giù">↓</button>
+        <button type="button" class="piccolo-b" data-mtogli="${esc(x.ID)}" aria-label="Togli">✕</button></span></li>`).join('') || '<li class="vuoto">Routine vuota.</li>'}</ul>
+      <form id="mob-nuovo" class="riga-aggiungi"><input name="esercizio" required placeholder="＋ esercizio" autocomplete="off"><input name="dose" class="corto" inputmode="numeric" placeholder="dose" required>
+        <select name="unita" class="corto">${UNITA_ALL.map(u => `<option>${u}</option>`).join('')}</select><button class="primario" type="submit">Aggiungi</button></form></div>`;
+  }
+
+  main.innerHTML = `
+    <div class="testata"><h1>Allenamento</h1><span class="piccolo">${dataBreve(k)}</span></div>
+    ${schedeAll('mobilita')}
+    <div class="carta ${fatta ? 'mob-fatta' : ''}"><div class="budget-testa"><span class="etichetta" style="margin:0">Oggi · ${esc(nome)}</span><span class="piccolo">~${minutiRoutine(voci)}' · ${fatta ? '<span class="testo-verde">✓ completata</span>' : fattiN + ' di ' + voci.length}</span></div>
+      <div class="barra-mutuo"><span style="width:${voci.length ? (fatta ? 100 : fattiN / voci.length * 100) : 0}%;background:var(--verde)"></span></div>
+      <ul class="elenco">${voci.map(x => `<li class="${s.fatti[x.ID] || fatta ? 'fatto' : ''}"><input type="checkbox" data-mspunta="${esc(x.ID)}" ${s.fatti[x.ID] || fatta ? 'checked' : ''} aria-label="Fatto">
+        <div class="corpo"><div>${esc(x.Esercizio)}</div>${x.Indicazione ? `<div class="sotto">${esc(x.Indicazione)}</div>` : ''}</div><div class="num piccolo">${esc(doseTesto(x))}</div></li>`).join('') || '<li class="vuoto">Routine vuota: aggiungi gli esercizi qui sotto (✎).</li>'}</ul>
+      <div class="azioni"><button type="button" class="primario" id="mob-avvia" ${voci.length ? '' : 'disabled'}>▶ ${fattiN && !fatta ? 'Riprendi guidata' : 'Avvia guidata'}</button>
+        ${fatta ? '' : `<button type="button" id="mob-fatta" ${fattiN ? '' : 'disabled'}>Fatta</button>`}</div>
+      ${fatta ? '' : '<p class="piccolo">Conta come fatta solo se completi tutte le voci.</p>'}</div>
+    <div class="carta" style="margin-top:12px"><div class="budget-testa"><span class="etichetta" style="margin:0">Questa settimana · ${sett.filter(mobFatta).length} di ${obiettivo}</span><span class="piccolo">${fila} ${fila === 1 ? 'giorno' : 'giorni'} di fila</span></div>
+      <div class="mob-pallini">${pall}</div></div>
+    <h2>Routine</h2>
+    <ul class="elenco carta">${nomi.map(r => { const vv = routineMob(r); return `<li><div class="corpo">${esc(r)}<div class="sotto">${vv.length} esercizi · ~${minutiRoutine(vv)}'${r === 'Lunga' ? ' · ' + esc(par('Giorno mobilità lunga') || 'Mer') : r === 'Riscaldamento' ? ' · nei giorni con la scheda' : ''}</div></div>
+      <button type="button" class="piccolo-b" data-mavvia="${esc(r)}">▶</button><button type="button" class="piccolo-b" data-mmodifica="${esc(r)}">✎</button></li>`; }).join('') || '<li class="vuoto">Le routine arrivano col prossimo aggiornamento (script 14).</li>'}</ul>
+    ${modifica}
+    <details class="carta mob-impost" style="margin-top:12px"><summary class="etichetta">Impostazioni</summary>
+      <label class="campo-riga">Obiettivo a settimana<input id="mob-ob" type="number" min="1" max="7" value="${obiettivo}"></label>
+      <label class="campo-riga">Giorno della Lunga<select id="mob-giorno">${['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'].map(g => `<option ${normalizza(par('Giorno mobilità lunga') || 'Mer').slice(0, 3) === normalizza(g) ? 'selected' : ''}>${g}</option>`).join('')}</select></label>
+      <label class="campo-riga">Promemoria (Calendar)<input id="mob-ora" type="time" value="${esc(oraMob())}"></label>
+      <p class="piccolo">Se alle ${esc(oraMob() || '—')} la routine di oggi non è completa, il Google Calendar ti avvisa sul telefono (vuoto = nessun avviso).</p></details>`;
+
+  $$('[data-mspunta]', main).forEach(c => {
+    c.onchange = () => { const st = ses.get(); if (c.checked) st.fatti[c.dataset.mspunta] = true; else delete st.fatti[c.dataset.mspunta]; ses.set(st); vistaMobilita(main); };
+  });
+  const av = $('#mob-avvia', main);
+  if (av) av.onclick = () => apriGuidata(nome, main);
+  const bf = $('#mob-fatta', main);
+  if (bf) bf.onclick = () => {
+    const st = ses.get(), f = voci.filter(x => st.fatti[x.ID]).length;
+    const ok = salvaDiarioMob(nome, f, voci.length, minutiRoutine(voci));
+    toast(ok ? 'Mobilità di oggi completata ✓' : f + ' di ' + voci.length + ': non conta come fatta');
+    vistaMobilita(main);
+  };
+  $$('[data-mavvia]', main).forEach(b => { b.onclick = () => apriGuidata(b.dataset.mavvia, main); });
+  $$('[data-mmodifica]', main).forEach(b => { b.onclick = () => { statoMob.modifica = statoMob.modifica === b.dataset.mmodifica ? '' : b.dataset.mmodifica; vistaMobilita(main); }; });
+  const ch = $('#mob-chiudi', main);
+  if (ch) ch.onclick = () => { statoMob.modifica = ''; vistaMobilita(main); };
+  $$('[data-mcampo]', main).forEach(i => {
+    i.onchange = () => { const v = i.dataset.mcampo === 'Dose' ? n(i.value) : i.value; salva('Mobilità', { [i.dataset.mcampo]: v }, i.closest('li').dataset.id); toast('Salvato'); };
+  });
+  const riordina = (i, d) => {
+    const vv = routineMob(statoMob.modifica), a = vv[i], b = vv[i + d];
+    if (!a || !b) return;
+    vv.splice(i, 1); vv.splice(i + d, 0, a);
+    vv.forEach((x, j) => { if (n(x.Ordine) !== j + 1) salva('Mobilità', { 'Ordine': j + 1 }, x.ID); });
+    vistaMobilita(main);
+  };
+  $$('[data-su]', main).forEach(b => { b.onclick = () => riordina(Number(b.dataset.su), -1); });
+  $$('[data-giu]', main).forEach(b => { b.onclick = () => riordina(Number(b.dataset.giu), 1); });
+  $$('[data-mtogli]', main).forEach(b => { b.onclick = () => { elimina('Mobilità', b.dataset.mtogli); vistaMobilita(main); }; });
+  const fn = $('#mob-nuovo', main);
+  if (fn) fn.onsubmit = e => {
+    e.preventDefault();
+    const fd = new FormData(fn), vv = routineMob(statoMob.modifica);
+    salva('Mobilità', { 'Routine': statoMob.modifica, 'Ordine': vv.length + 1, 'Esercizio': String(fd.get('esercizio')).trim(), 'Dose': n(fd.get('dose')), 'Unità': fd.get('unita'), 'Indicazione': '' });
+    vistaMobilita(main);
+  };
+  const sp = (id, nomeP, conv) => { const el = $(id, main); if (el) el.onchange = () => salvaParametri({ [nomeP]: conv(el.value) }, 'Salvato'); };
+  sp('#mob-ob', 'Mobilità a settimana (obiettivo)', v => Number(v) || 6);
+  sp('#mob-giorno', 'Giorno mobilità lunga', v => v);
+  sp('#mob-ora', 'Promemoria mobilità (ora)', v => v);
+  if (query && query.get('guidata') === '1' && !statoMob.guidata && voci.length && !fatta) { history.replaceState(null, '', '#/mobilita'); apriGuidata(nome, main); }
+}
+
+/** Ora del promemoria come "HH:MM" (nel foglio può essere un'ora vera, che arriva come data ISO). */
+function oraMob() {
+  const v = par('Promemoria mobilità (ora)');
+  if (v === undefined || v === null) return '21:30';
+  const m = String(v).match(/T(\d{2}):(\d{2})/) || String(v).match(/^(\d{1,2})[:.](\d{2})/);
+  if (!m) return '';
+  if (String(v).indexOf('T') > 0) { const d = new Date(v); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  return pad(Number(m[1])) + ':' + m[2];
+}
+
+// ── Modalità guidata (a tutto schermo, leggibile da terra) ──
+// s: timer che parte da solo, a fine bip e avanti dopo 3 s · s/lato: destro → 5 s di cambio → sinistro · rip e rip/lato: "Fatto".
+let wakeMob = null;
+function apriGuidata(routine, mainRitorno) {
+  const voci = routineMob(routine);
+  if (!voci.length) return;
+  const ses = sessioneMob(routine), s0 = ses.get();
+  const g = statoMob.guidata = { routine, voci, i: Math.max(0, voci.findIndex(x => !s0.fatti[x.ID])), fase: 0, fine: 0, resto: 0, pausa: false, id: null, prossimo: 0 };
+  if (g.i < 0) g.i = 0;
+  const el = document.createElement('div');
+  el.className = 'guidata';
+  document.body.appendChild(el);
+  document.body.classList.add('guidata-aperta');
+  try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => { wakeMob = w; }).catch(() => {}); } catch (e) { /* niente wake lock */ }
+  let audio = null;
+  const bip = (f, durata) => {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audio.createOscillator(), v = audio.createGain();
+      o.frequency.value = f || 880; o.connect(v); v.connect(audio.destination);
+      v.gain.setValueAtTime(0.3, audio.currentTime); v.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + (durata || 0.35));
+      o.start(); o.stop(audio.currentTime + (durata || 0.35));
+    } catch (e) { /* niente audio */ }
+    try { navigator.vibrate && navigator.vibrate(300); } catch (e) { /* niente vibrazione */ }
+  };
+  const fasi = x => {
+    const u = String(x['Unità'] || 'rip'), d = n(x.Dose);
+    if (u === 's') return [{ sec: d }];
+    if (u === 'min') return [{ sec: d * 60 }];
+    if (u === 's/lato') return [{ sec: d, lato: 'lato destro' }, { sec: 5, cambio: true, lato: 'cambia lato' }, { sec: d, lato: 'lato sinistro' }];
+    return [{ rip: true, lato: u === 'rip/lato' ? 'per lato' : '' }];
+  };
+  const segnaFatto = () => { const st = ses.get(); st.fatti[g.voci[g.i].ID] = true; ses.set(st); };
+  const avvia = () => {
+    const f = fasi(g.voci[g.i])[g.fase];
+    g.pausa = false;
+    if (f && f.sec) { g.fine = Date.now() + f.sec * 1000; g.resto = f.sec * 1000; }
+    disegnaG();
+  };
+  const avanti = fatto => {
+    clearTimeout(g.prossimo);
+    if (fatto) segnaFatto();
+    g.i++; g.fase = 0;
+    if (g.i >= g.voci.length) return fine();
+    avvia();
+  };
+  const fine = () => {
+    clearInterval(g.id); clearTimeout(g.prossimo);
+    const st = ses.get(), f = g.voci.filter(x => st.fatti[x.ID]).length, ok = f === g.voci.length;
+    salvaDiarioMob(routine, f, g.voci.length, minutiRoutine(g.voci));
+    if (ok) bip(1320, 0.6);
+    el.innerHTML = `<div class="g-fine"><div class="g-titolo">${ok ? 'Routine completata ✓' : f + ' di ' + g.voci.length}</div>
+      <p>${ok ? esc(routine) + (routine === 'Riscaldamento' ? ': pronto per l\'allenamento.' : ': conta per oggi.') : 'Non conta come fatta: ne mancano ' + (g.voci.length - f) + '. Puoi riprenderla quando vuoi.'}</p>
+      <button type="button" class="primario g-grande" id="g-chiudi">Chiudi</button></div>`;
+    $('#g-chiudi', el).onclick = chiudi;
+  };
+  const chiudi = () => {
+    clearInterval(g.id); clearTimeout(g.prossimo);
+    const st = ses.get(), f = g.voci.filter(x => st.fatti[x.ID]).length;
+    if (f && f < g.voci.length) salvaDiarioMob(routine, f, g.voci.length, minutiRoutine(g.voci));
+    el.remove(); document.body.classList.remove('guidata-aperta');
+    try { if (wakeMob) wakeMob.release(); } catch (e) { /* già rilasciato */ }
+    wakeMob = null; statoMob.guidata = null;
+    if (mainRitorno && $('#vista') === mainRitorno) disegnaDiNuovo();
+  };
+  const disegnaDiNuovo = () => { try { disegna(); } catch (e) { /* vista cambiata */ } };
+  const disegnaG = () => {
+    const x = g.voci[g.i], ff = fasi(x), f = ff[g.fase], poi = g.voci[g.i + 1];
+    const resto = f.sec ? (g.pausa ? g.resto : Math.max(0, g.fine - Date.now())) : 0, sec = Math.ceil(resto / 1000);
+    el.innerHTML = `<div class="g-testa"><span>${g.i + 1} di ${g.voci.length}${poi ? ' · poi ' + esc(poi.Esercizio) : ' · ultimo'}</span><button type="button" class="g-x" id="g-x" aria-label="Chiudi">✕</button></div>
+      <div class="g-centro"><div class="g-routine">${esc(routine)}</div><div class="g-nome">${esc(x.Esercizio)}</div>
+        ${x.Indicazione ? `<div class="g-indic">${esc(x.Indicazione)}</div>` : ''}
+        ${f.lato ? `<div class="g-lato ${f.cambio ? 'cambio' : ''}">${esc(f.lato)}</div>` : ''}
+        ${f.sec ? `<div class="g-timer num">${Math.floor(sec / 60)}:${pad(sec % 60)}</div><div class="g-barra"><span style="width:${100 - resto / (f.sec * 1000) * 100}%"></span></div>`
+          : `<div class="g-dose num">${n(x.Dose)}<small> ${String(x['Unità'] || 'rip') === 'rip/lato' ? 'rip per lato' : 'rip'}</small></div>`}</div>
+      <div class="g-comandi"><button type="button" id="g-indietro" ${g.i ? '' : 'disabled'}>◀ Indietro</button>
+        ${f.sec ? `<button type="button" class="primario g-grande" id="g-pausa">${g.pausa ? '▶ Avvia' : '❚❚ Pausa'}</button>` : '<button type="button" class="primario g-grande" id="g-fatto">✓ Fatto</button>'}
+        <button type="button" id="g-salta">Salta ▶</button></div>`;
+    $('#g-x', el).onclick = chiudi;
+    $('#g-indietro', el).onclick = () => { clearTimeout(g.prossimo); g.i = Math.max(0, g.i - 1); g.fase = 0; avvia(); };
+    $('#g-salta', el).onclick = () => avanti(false);
+    const fb = $('#g-fatto', el);
+    if (fb) fb.onclick = () => avanti(true);
+    const pb = $('#g-pausa', el);
+    if (pb) pb.onclick = () => { if (g.pausa) { g.pausa = false; g.fine = Date.now() + g.resto; } else { g.pausa = true; g.resto = Math.max(0, g.fine - Date.now()); } disegnaG(); };
+  };
+  g.id = setInterval(() => {
+    if (!statoMob.guidata || g.pausa || g.i >= g.voci.length) return;
+    const f = fasi(g.voci[g.i])[g.fase];
+    if (!f || !f.sec) return;
+    const resto = g.fine - Date.now();
+    const t = $('.g-timer', el), b = $('.g-barra span', el);
+    if (t) { const sec = Math.ceil(Math.max(0, resto) / 1000); t.textContent = Math.floor(sec / 60) + ':' + pad(sec % 60); }
+    if (b) b.style.width = (100 - Math.max(0, resto) / (f.sec * 1000) * 100) + '%';
+    if (resto <= 0 && !g.prossimo) {
+      bip(f.cambio ? 660 : 880);
+      const ff = fasi(g.voci[g.i]);
+      if (g.fase < ff.length - 1) { g.fase++; avvia(); }
+      else { g.prossimo = setTimeout(() => { g.prossimo = 0; avanti(true); }, 3000); g.fine = Infinity; }
+    }
+  }, 200);
+  avvia();
+}
+
+/** Riquadro "Riscaldamento" in cima ad Allenamento › Oggi (solo nei giorni con esercizi in Scheda). */
+function riquadroRiscaldamento() {
+  const v = routineMob('Riscaldamento');
+  if (!v.length) return '';
+  const fatto = completa(rigaDiario(oggiK(), 'Riscaldamento'));
+  return `<div class="carta mob-risc"><div class="corpo"><span class="etichetta" style="margin:0">Riscaldamento · ~${minutiRoutine(v)}'</span>
+    <div class="piccolo">${fatto ? '<span class="testo-verde">✓ fatto</span>' : v.map(x => esc(x.Esercizio)).slice(0, 3).join(' · ') + '…'}</div></div>
+    <button type="button" class="${fatto ? '' : 'primario'}" id="risc-avvia">▶ ${fatto ? 'Rifai' : 'Avvia'}</button></div>`;
+}
+
+const SCHEDE_ALL = [['allenamento', 'Oggi'], ['scheda', 'Scheda'], ['mobilita', 'Mobilità'], ['progressi', 'Progressi']];   // v16: + Mobilità
 const FINITO_WEB = 'Allenamento completato';
 
 function schedeAll(attiva) {
@@ -1814,6 +2086,7 @@ function vistaAllenamento(main) {
   main.innerHTML = `
     <div class="testata"><h1>Allenamento</h1><span class="piccolo">${dataBreve(k)}</span></div>
     ${schedeAll('allenamento')}
+    ${es.length ? riquadroRiscaldamento() : ''}
     <div class="carta"><div class="etichetta">Oggi${gruppo ? ' · ' + esc(gruppo) : es.length ? '' : ' · riposo'}</div>
       ${nomeScheda || settN ? `<p class="piccolo" style="margin:0 0 4px">${nomeScheda ? 'scheda "' + esc(nomeScheda) + '"' : ''}${settN > 0 ? ' · settimana ' + settN + (settimane ? ' di ' + settimane : '') : ''}${es.length ? ' · ' + fatti.length + ' di ' + es.length + ' fatti' : ''}</p>` : ''}
       <ul class="elenco">${es.length ? es.map(e => {
@@ -1844,6 +2117,8 @@ function vistaAllenamento(main) {
     if (timerWeb.pausa >= 0) { timerWeb.fine = Date.now() + timerWeb.pausa; timerWeb.pausa = -1; } else { timerWeb.pausa = Math.max(0, timerWeb.fine - Date.now()); }
   };
   $('#all-timer', main).onclick = () => avviaTimer(timerWeb.durata || rec);
+  const ra = $('#risc-avvia', main);
+  if (ra) ra.onclick = () => apriGuidata('Riscaldamento', main);   // v16
   $('#all-finito', main).onclick = () => {
     if (!finito) salva('Log', { 'Data': k, 'Esercizio': FINITO_WEB, 'Note': 'dalla web app' });
     toast('Allenamento segnato come fatto');
@@ -1854,7 +2129,7 @@ function vistaAllenamento(main) {
       const e = es.find(x => x.ID === cb.dataset.spunta);
       if (cb.checked) {
         const resto = Math.max(1, n(e.Serie)) - serieFatte(k, e.Esercizio);
-        if (resto > 0) salva('Log', { 'Data': k, 'Esercizio': e.Esercizio, 'Serie': resto, 'Ripetizioni': e.Ripetizioni, 'Peso (kg)': e['Peso previsto (kg)'] || '' });
+        if (resto > 0) salva('Log', { 'Data': k, 'Esercizio': e.Esercizio, 'Serie': resto, 'Ripetizioni': ripMin(e.Ripetizioni) || '', 'Peso (kg)': e['Peso previsto (kg)'] || '' });
       } else logDel(k, e.Esercizio).forEach(l => elimina('Log', l.ID));
       vistaAllenamento(main);
     };
@@ -1864,7 +2139,7 @@ function vistaAllenamento(main) {
       const i = Number(b.dataset.serie), fatte = logDel(k, corrente.Esercizio);
       const prima = fatte[i];
       const kg0 = prima ? prima['Peso (kg)'] : ultimoKg(corrente.Esercizio) || corrente['Peso previsto (kg)'] || '';
-      const v = prompt(corrente.Esercizio + ' · serie ' + (i + 1) + '\nripetizioni × kg (es. 8 × 40)', (prima ? prima.Ripetizioni : corrente.Ripetizioni) + ' × ' + kg0);
+      const v = prompt(corrente.Esercizio + ' · serie ' + (i + 1) + '\nripetizioni × kg (es. 8 × 40)', (prima ? prima.Ripetizioni : ripMin(corrente.Ripetizioni)) + ' × ' + kg0);
       if (v == null) return;
       const m = v.replace(',', '.').match(/(\d+)\s*[x×*]?\s*(\d+(?:\.\d+)?)?/i);
       if (!m) return;
@@ -1912,8 +2187,8 @@ function vistaScheda(main, query) {
         <div class="corpo">${esc(e.Esercizio)}</div>
         <button class="piccolo-b lucchetto" data-togli="${esc(e.ID)}" aria-label="Togli">✕</button>
         <span class="controlli"><input class="corto" data-campo="Serie" value="${esc(e.Serie)}" inputmode="numeric" aria-label="Serie">×
-        <input class="corto" data-campo="Ripetizioni" value="${esc(e.Ripetizioni)}" inputmode="numeric" aria-label="Ripetizioni">
-        <select class="corto" data-campo="Unità" aria-label="Unità">${['rip', 's', 'min'].map(u => `<option ${String(e['Unità'] || 'rip') === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
+        <input class="corto" data-campo="Ripetizioni" value="${esc(e.Ripetizioni)}" aria-label="Ripetizioni (anche 8-12)">
+        <select class="corto" data-campo="Unità" aria-label="Unità">${UNITA_ALL.map(u => `<option ${String(e['Unità'] || 'rip') === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
         <input class="corto" data-campo="Peso previsto (kg)" value="${esc(e['Peso previsto (kg)'] || '')}" inputmode="decimal" aria-label="kg" placeholder="kg"> kg</span></li>`).join('') || '<li class="vuoto">Giorno di riposo: aggiungi un esercizio.</li>'}</ul>
       <form id="sch-nuovo" class="riga-aggiungi"><input id="sch-es" placeholder="＋ esercizio (cerca o scrivi)…" list="sch-noti" autocomplete="off">
         <datalist id="sch-noti">${[...new Set(righe('Scheda').map(e => e.Esercizio).filter(Boolean))].map(x => `<option value="${esc(x)}">`).join('')}</datalist>
@@ -1984,7 +2259,7 @@ function vistaProgressi(main, query) {
   const vol = [];
   for (let w = 7; w >= 0; w--) {
     const da = spostaGiorni(lun, -7 * w), a = spostaGiorni(da, 6);
-    vol.push(log.filter(l => l.Data >= da && l.Data <= a).reduce((s, l) => s + Math.max(1, n(l.Serie)) * n(l.Ripetizioni) * n(l['Peso (kg)']), 0) / 1000);
+    vol.push(log.filter(l => l.Data >= da && l.Data <= a).reduce((s, l) => s + Math.max(1, n(l.Serie)) * n(l.Ripetizioni) * n(l['Peso (kg)']) * latiDi(l.Esercizio), 0) / 1000);   // v16: "/lato" conta due volte
   }
   const maxV = Math.max(0.1, ...vol);
   // Carico per esercizio.

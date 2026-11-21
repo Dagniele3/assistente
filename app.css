@@ -853,3 +853,41 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: v
   .liste-griglia, .liste-modulo, .liste-tipi { grid-template-columns: 1fr; }
   .liste-aggiungi input.q { width: 90px; }
 }
+
+/* ───────── v16 Mobilità: scheda, pallini della settimana, riscaldamento, modalità guidata a tutto schermo ───────── */
+.mob-fatta { border-color: rgba(129, 201, 149, .6); }
+.mob-pallini { display: flex; gap: 10px; justify-content: space-between; margin-top: 10px; }
+.mob-pallino { width: 38px; height: 38px; border-radius: 50%; border: 2px solid var(--bordo); display: inline-flex; align-items: center; justify-content: center; }
+.mob-pallino b { font-size: 13px; color: var(--testo-2); font-weight: 600; }
+.mob-pallino.pieno { background: var(--verde); border-color: var(--verde); }
+.mob-pallino.pieno b { color: #10261a; }
+.mob-pallino.oggi { box-shadow: 0 0 0 3px rgba(138, 180, 248, .55); }
+.mob-modifica li { flex-wrap: wrap; gap: 8px; }
+.mob-campi { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.mob-campi input:first-child { flex: 1 1 180px; }
+.mob-campi .largo { flex: 1 1 100%; }
+.mob-ordine { display: flex; gap: 4px; }
+.mob-risc { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; border-color: rgba(253, 214, 99, .45); }
+.mob-risc .corpo { flex: 1; }
+.mob-impost summary { cursor: pointer; }
+body.guidata-aperta { overflow: hidden; }
+.guidata { position: fixed; inset: 0; z-index: 50; background: #0b0e12; color: var(--testo); display: flex; flex-direction: column; padding: 18px 22px; }
+.g-testa { display: flex; justify-content: space-between; align-items: center; font-size: 20px; color: var(--testo-2); }
+.g-x { min-height: 48px; min-width: 48px; font-size: 22px; background: none; }
+.g-centro { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 10px; }
+.g-routine { font-size: 16px; letter-spacing: .08em; text-transform: uppercase; color: var(--accento); }
+.g-nome { font-size: clamp(34px, 7vw, 64px); font-weight: 700; line-height: 1.1; }
+.g-indic { font-size: clamp(18px, 3vw, 26px); color: var(--testo-2); max-width: 900px; }
+.g-lato { font-size: 24px; color: var(--verde); font-weight: 600; }
+.g-lato.cambio { color: var(--giallo); }
+.g-timer { font-size: clamp(90px, 22vw, 200px); font-weight: 700; line-height: 1; }
+.g-dose { font-size: clamp(80px, 18vw, 170px); font-weight: 700; line-height: 1; }
+.g-dose small { font-size: 28px; font-weight: 400; color: var(--testo-2); }
+.g-barra { width: min(720px, 90%); height: 12px; border-radius: 6px; background: var(--superficie-2); overflow: hidden; }
+.g-barra span { display: block; height: 100%; background: var(--verde); transition: width .2s linear; }
+.g-comandi { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; padding-bottom: 8px; }
+.g-comandi button { min-height: 64px; font-size: 20px; padding: 8px 22px; }
+.g-grande { min-width: 220px; font-size: 26px !important; }
+.g-fine { margin: auto; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; }
+.g-titolo { font-size: clamp(36px, 7vw, 60px); font-weight: 700; color: var(--verde); }
+.g-fine p { font-size: 22px; color: var(--testo-2); max-width: 640px; }
