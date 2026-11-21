@@ -888,6 +888,27 @@ body.guidata-aperta { overflow: hidden; }
 .g-comandi { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; padding-bottom: 8px; }
 .g-comandi button { min-height: 64px; font-size: 20px; padding: 8px 22px; }
 .g-grande { min-width: 220px; font-size: 26px !important; }
+/* v16.4: "▶ Via", "Come si fa" accanto (sotto sul telefono), video */
+.g-corpo { flex: 1; display: flex; gap: 24px; align-items: center; min-height: 0; }
+.g-corpo .g-centro { height: 100%; }
+.g-come { flex: 0 0 min(420px, 38%); max-height: 100%; overflow: auto; background: var(--superficie); border-radius: 16px; padding: 14px 18px; font-size: 19px; line-height: 1.4; }
+.g-come summary { font-size: 18px; letter-spacing: .06em; text-transform: uppercase; color: var(--accento); cursor: pointer; min-height: 40px; display: flex; align-items: center; }
+.g-come .mob-passi li { margin: 0 0 10px; }
+.g-pronto { font-size: 20px; color: var(--giallo); }
+.g-via { background: var(--verde) !important; color: #06210f !important; border-color: var(--verde) !important; font-size: 30px !important; min-width: 280px; }
+.mob-passi { margin: 6px 0 8px; padding-left: 22px; }
+.elenco .mob-passi li, .mob-passi li { display: list-item; min-height: 0; padding: 3px 0; border: 0; gap: 0; }
+.mob-come[open] { margin-top: 2px; }
+.mob-passi b { color: var(--accento); font-weight: 600; }
+.mob-come summary { font-size: 13px; color: var(--accento); cursor: pointer; padding: 2px 0; }
+.mob-come { font-size: 14px; }
+.mob-video { display: inline-block; margin-top: 4px; padding: 10px 16px; border-radius: 10px; background: var(--superficie-2); color: var(--testo); text-decoration: none; font-weight: 600; }
+.mob-modifica textarea { font: inherit; width: 100%; }
+@media (max-width: 899px) {
+  .g-corpo { flex-direction: column; align-items: stretch; overflow: auto; }
+  .g-corpo .g-centro { height: auto; flex: 1 0 auto; }
+  .g-come { flex: 0 0 auto; max-height: none; font-size: 17px; }
+}
 .g-fine { margin: auto; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; }
 .g-titolo { font-size: clamp(36px, 7vw, 60px); font-weight: 700; color: var(--verde); }
 .g-fine p { font-size: 22px; color: var(--testo-2); max-width: 640px; }

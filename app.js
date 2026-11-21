@@ -1752,6 +1752,24 @@ function ripMin(v) { const m = String(v == null ? '' : v).match(/\d+(?:[.,]\d+)?
 /** 2 se l'esercizio della Scheda è "per lato" (le ripetizioni scritte valgono per lato). */
 function latiDi(nome) { const e = righe('Scheda').find(x => normalizza(x.Esercizio) === normalizza(nome)); return e && /\/lato/.test(String(e['Unità'] || '')) ? 2 : 1; }
 
+/** v16.4: "Come si fa" del foglio → passi (uno per riga, o separati da " | "). */
+function passiMob(x) { return String((x && x['Come si fa']) || '').split(/\r?\n|\s\|\s/).map(t => t.trim()).filter(Boolean); }
+/** v16.4: link del video: quello del foglio, "-" = nessuno, vuoto = ricerca su YouTube col nome dell'esercizio. */
+function videoMob(x) {
+  const v = String((x && x.Video) || '').trim();
+  if (v === '-' || v === '—') return '';
+  if (/^https?:\/\//i.test(v)) return v;
+  const nome = String((x && x.Esercizio) || '').trim();
+  return nome ? 'https://www.youtube.com/results?search_query=' + encodeURIComponent(nome + ' mobility exercise').replace(/%20/g, '+') : '';
+}
+/** v16.4: passo con l'etichetta in grassetto ("Parti:", "Muovi:", "Senti:", "Evita:"). */
+function passoHtml(t) { const m = String(t).match(/^([A-Za-zÀ-ú]{3,10}):\s*(.*)$/); return m ? `<b>${esc(m[1])}</b> ${esc(m[2])}` : esc(t); }
+function comeSiFaHtml(x) {
+  const pp = passiMob(x), v = videoMob(x);
+  return (pp.length ? `<ol class="mob-passi">${pp.map(t => `<li>${passoHtml(t)}</li>`).join('')}</ol>` : '<p class="piccolo">Nessun passo scritto: aggiungili con ✎ (un passo per riga).</p>') +
+    (v ? `<a class="bottone mob-video" href="${esc(v)}" target="_blank" rel="noopener">▶ Guarda il video</a>` : '');
+}
+
 function routineMob(nome) {
   return righe('Mobilità').filter(x => normalizza(x.Routine) === normalizza(nome) && String(x.Esercizio || '').trim()).sort((a, b) => n(a.Ordine) - n(b.Ordine));
 }
@@ -1812,7 +1830,9 @@ function vistaMobilita(main, query) {
         <div class="mob-campi"><input data-mcampo="Esercizio" value="${esc(x.Esercizio)}" aria-label="Esercizio">
           <input class="corto" data-mcampo="Dose" value="${esc(x.Dose)}" inputmode="numeric" aria-label="Dose">
           <select class="corto" data-mcampo="Unità" aria-label="Unità">${UNITA_ALL.map(u => `<option ${String(x['Unità'] || 'rip') === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
-          <input class="largo" data-mcampo="Indicazione" value="${esc(x.Indicazione || '')}" placeholder="indicazione di una riga" aria-label="Indicazione"></div>
+          <input class="largo" data-mcampo="Indicazione" value="${esc(x.Indicazione || '')}" placeholder="indicazione di una riga" aria-label="Indicazione">
+          <textarea class="largo" rows="4" data-mcampo="Come si fa" placeholder="Come si fa: un passo per riga (Parti: … / Muovi: … / Senti: … / Evita: …)" aria-label="Come si fa">${esc(x['Come si fa'] || '')}</textarea>
+          <input class="largo" data-mcampo="Video" value="${esc(x.Video || '')}" placeholder="link del video (vuoto = ricerca su YouTube, - = nessuno)" aria-label="Video"></div>
         <span class="mob-ordine"><button type="button" class="piccolo-b" data-su="${i}" ${i ? '' : 'disabled'} aria-label="Su">↑</button><button type="button" class="piccolo-b" data-giu="${i}" ${i < vv.length - 1 ? '' : 'disabled'} aria-label="Giù">↓</button>
         <button type="button" class="piccolo-b" data-mtogli="${esc(x.ID)}" aria-label="Togli">✕</button></span></li>`).join('') || '<li class="vuoto">Routine vuota.</li>'}</ul>
       <form id="mob-nuovo" class="riga-aggiungi"><input name="esercizio" required placeholder="＋ esercizio" autocomplete="off"><input name="dose" class="corto" inputmode="numeric" placeholder="dose" required>
@@ -1825,7 +1845,8 @@ function vistaMobilita(main, query) {
     <div class="carta ${fatta ? 'mob-fatta' : ''}"><div class="budget-testa"><span class="etichetta" style="margin:0">Oggi · ${esc(nome)}</span><span class="piccolo">~${minutiRoutine(voci)}' · ${fatta ? '<span class="testo-verde">✓ completata</span>' : fattiN + ' di ' + voci.length}</span></div>
       <div class="barra-mutuo"><span style="width:${voci.length ? (fatta ? 100 : fattiN / voci.length * 100) : 0}%;background:var(--verde)"></span></div>
       <ul class="elenco">${voci.map(x => `<li class="${s.fatti[x.ID] || fatta ? 'fatto' : ''}"><input type="checkbox" data-mspunta="${esc(x.ID)}" ${s.fatti[x.ID] || fatta ? 'checked' : ''} aria-label="Fatto">
-        <div class="corpo"><div>${esc(x.Esercizio)}</div>${x.Indicazione ? `<div class="sotto">${esc(x.Indicazione)}</div>` : ''}</div><div class="num piccolo">${esc(doseTesto(x))}</div></li>`).join('') || '<li class="vuoto">Routine vuota: aggiungi gli esercizi qui sotto (✎).</li>'}</ul>
+        <div class="corpo"><div>${esc(x.Esercizio)}</div>${x.Indicazione ? `<div class="sotto">${esc(x.Indicazione)}</div>` : ''}
+          <details class="mob-come"><summary>Come si fa</summary>${comeSiFaHtml(x)}</details></div><div class="num piccolo">${esc(doseTesto(x))}</div></li>`).join('') || '<li class="vuoto">Routine vuota: aggiungi gli esercizi qui sotto (✎).</li>'}</ul>
       <div class="azioni"><button type="button" class="primario" id="mob-avvia" ${voci.length ? '' : 'disabled'}>▶ ${fattiN && !fatta ? 'Riprendi guidata' : 'Avvia guidata'}</button>
         ${fatta ? '' : `<button type="button" id="mob-fatta" ${fattiN ? '' : 'disabled'}>Fatta</button>`}</div>
       ${fatta ? '' : '<p class="piccolo">Conta come fatta solo se completi tutte le voci.</p>'}</div>
@@ -1895,13 +1916,14 @@ function oraMob() {
 }
 
 // ── Modalità guidata (a tutto schermo, leggibile da terra) ──
-// s: timer che parte da solo, a fine bip e avanti dopo 3 s · s/lato: destro → 5 s di cambio → sinistro · rip e rip/lato: "Fatto".
+// s: timer fermo finché non tocchi "▶ Via" (v16.4), a fine bip e avanti dopo 3 s · s/lato: destro (▶ Via) → 5 s di cambio →
+// sinistro (▶ Via) · rip e rip/lato: "Fatto". Accanto "Come si fa" (passi del foglio) e "▶ Guarda il video".
 let wakeMob = null;
 function apriGuidata(routine, mainRitorno) {
   const voci = routineMob(routine);
   if (!voci.length) return;
   const ses = sessioneMob(routine), s0 = ses.get();
-  const g = statoMob.guidata = { routine, voci, i: Math.max(0, voci.findIndex(x => !s0.fatti[x.ID])), fase: 0, fine: 0, resto: 0, pausa: false, id: null, prossimo: 0 };
+  const g = statoMob.guidata = { routine, voci, i: Math.max(0, voci.findIndex(x => !s0.fatti[x.ID])), fase: 0, fine: 0, resto: 0, pausa: false, attesa: false, id: null, prossimo: 0, come: matchMedia('(min-width: 900px)').matches };
   if (g.i < 0) g.i = 0;
   const el = document.createElement('div');
   el.className = 'guidata';
@@ -1930,6 +1952,7 @@ function apriGuidata(routine, mainRitorno) {
   const avvia = () => {
     const f = fasi(g.voci[g.i])[g.fase];
     g.pausa = false;
+    g.attesa = !!(f && f.sec && !f.cambio);   // v16.4: il cambio lato corre da solo, il resto aspetta "▶ Via"
     if (f && f.sec) { g.fine = Date.now() + f.sec * 1000; g.resto = f.sec * 1000; }
     disegnaG();
   };
@@ -1962,15 +1985,17 @@ function apriGuidata(routine, mainRitorno) {
   const disegnaDiNuovo = () => { try { disegna(); } catch (e) { /* vista cambiata */ } };
   const disegnaG = () => {
     const x = g.voci[g.i], ff = fasi(x), f = ff[g.fase], poi = g.voci[g.i + 1];
-    const resto = f.sec ? (g.pausa ? g.resto : Math.max(0, g.fine - Date.now())) : 0, sec = Math.ceil(resto / 1000);
+    const resto = f.sec ? (g.pausa || g.attesa ? g.resto : Math.max(0, g.fine - Date.now())) : 0, sec = Math.ceil(resto / 1000);
     el.innerHTML = `<div class="g-testa"><span>${g.i + 1} di ${g.voci.length}${poi ? ' · poi ' + esc(poi.Esercizio) : ' · ultimo'}</span><button type="button" class="g-x" id="g-x" aria-label="Chiudi">✕</button></div>
-      <div class="g-centro"><div class="g-routine">${esc(routine)}</div><div class="g-nome">${esc(x.Esercizio)}</div>
+      <div class="g-corpo"><div class="g-centro"><div class="g-routine">${esc(routine)}</div><div class="g-nome">${esc(x.Esercizio)}</div>
         ${x.Indicazione ? `<div class="g-indic">${esc(x.Indicazione)}</div>` : ''}
         ${f.lato ? `<div class="g-lato ${f.cambio ? 'cambio' : ''}">${esc(f.lato)}</div>` : ''}
         ${f.sec ? `<div class="g-timer num">${Math.floor(sec / 60)}:${pad(sec % 60)}</div><div class="g-barra"><span style="width:${100 - resto / (f.sec * 1000) * 100}%"></span></div>`
-          : `<div class="g-dose num">${n(x.Dose)}<small> ${String(x['Unità'] || 'rip') === 'rip/lato' ? 'rip per lato' : 'rip'}</small></div>`}</div>
+          : `<div class="g-dose num">${n(x.Dose)}<small> ${String(x['Unità'] || 'rip') === 'rip/lato' ? 'rip per lato' : 'rip'}</small></div>`}
+        ${g.attesa ? '<div class="g-pronto">Mettiti in posizione, poi tocca ▶ Via</div>' : ''}</div>
+        <details class="g-come" ${g.come ? 'open' : ''}><summary>Come si fa</summary>${comeSiFaHtml(x)}</details></div>
       <div class="g-comandi"><button type="button" id="g-indietro" ${g.i ? '' : 'disabled'}>◀ Indietro</button>
-        ${f.sec ? `<button type="button" class="primario g-grande" id="g-pausa">${g.pausa ? '▶ Avvia' : '❚❚ Pausa'}</button>` : '<button type="button" class="primario g-grande" id="g-fatto">✓ Fatto</button>'}
+        ${f.sec ? `<button type="button" class="primario g-grande ${g.attesa ? 'g-via' : ''}" id="g-pausa">${g.attesa ? '▶ Via' : g.pausa ? '▶ Avvia' : '❚❚ Pausa'}</button>` : '<button type="button" class="primario g-grande" id="g-fatto">✓ Fatto</button>'}
         <button type="button" id="g-salta">Salta ▶</button></div>`;
     $('#g-x', el).onclick = chiudi;
     $('#g-indietro', el).onclick = () => { clearTimeout(g.prossimo); g.i = Math.max(0, g.i - 1); g.fase = 0; avvia(); };
@@ -1978,10 +2003,18 @@ function apriGuidata(routine, mainRitorno) {
     const fb = $('#g-fatto', el);
     if (fb) fb.onclick = () => avanti(true);
     const pb = $('#g-pausa', el);
-    if (pb) pb.onclick = () => { if (g.pausa) { g.pausa = false; g.fine = Date.now() + g.resto; } else { g.pausa = true; g.resto = Math.max(0, g.fine - Date.now()); } disegnaG(); };
+    if (pb) pb.onclick = () => {
+      if (g.attesa || g.pausa) { g.attesa = false; g.pausa = false; g.fine = Date.now() + g.resto; }
+      else { g.pausa = true; g.resto = Math.max(0, g.fine - Date.now()); }
+      disegnaG();
+    };
+    const gc = $('.g-come', el);
+    if (gc) gc.ontoggle = () => { g.come = gc.open; };
+    const gv = $('.mob-video', el);   // aprendo il video il timer si ferma (riparte con ▶ Avvia)
+    if (gv) gv.addEventListener('click', () => { if (f.sec && !g.attesa && !g.pausa && !f.cambio) { g.pausa = true; g.resto = Math.max(0, g.fine - Date.now()); setTimeout(disegnaG, 0); } });
   };
   g.id = setInterval(() => {
-    if (!statoMob.guidata || g.pausa || g.i >= g.voci.length) return;
+    if (!statoMob.guidata || g.pausa || g.attesa || g.i >= g.voci.length) return;
     const f = fasi(g.voci[g.i])[g.fase];
     if (!f || !f.sec) return;
     const resto = g.fine - Date.now();
