@@ -1109,14 +1109,13 @@ function vistaScadenze(main, query) {
   const s = calcScadenze();
   const limite = 30;
   const vista = (query && query.get('vista')) === 'storico' ? 'storico' : 'prossime';
-  const filtro = (query && query.get('categoria')) || '';
+  const filtro = '';   // v15: niente più scelta Tutte / Casa / …: si vedono sempre tutte (la categoria resta nella riga)
   const tutte = s.aperte.concat(s.storico);
   const categorie = ['Casa'].concat(tutte.map(x => String(x.Categoria || '').trim()).filter(Boolean))
     .filter((c, i, a) => a.findIndex(y => normalizza(y) === normalizza(c)) === i);
   const link = (v, c) => '#/scadenze?' + new URLSearchParams(Object.assign(v === 'storico' ? { vista: 'storico' } : {}, c ? { categoria: c } : {})).toString();
   const testa = `<div class="testata"><h1>Scadenze</h1></div>
-    <nav class="schede-fin"><a href="${link('prossime', filtro)}" class="${vista === 'prossime' ? 'attiva' : ''}">Prossime</a><a href="${link('storico', filtro)}" class="${vista === 'storico' ? 'attiva' : ''}">Storico</a></nav>
-    <div class="azioni"><a class="bottone ${filtro ? '' : 'primario'}" href="${link(vista, '')}">Tutte</a>${categorie.map(c => `<a class="bottone ${normalizza(c) === normalizza(filtro) ? 'primario' : ''}" href="${link(vista, c)}">${esc(c)}</a>`).join('')}</div>`;
+    <nav class="schede-fin"><a href="${link('prossime', filtro)}" class="${vista === 'prossime' ? 'attiva' : ''}">Prossime</a><a href="${link('storico', filtro)}" class="${vista === 'storico' ? 'attiva' : ''}">Storico</a></nav>`;
   if (vista === 'storico') return vistaStoricoScadenze(main, query, s, testa, filtro);
 
   const scelte = filtro ? s.aperte.filter(x => normalizza(x.Categoria) === normalizza(filtro)) : s.aperte;
