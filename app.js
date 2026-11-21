@@ -441,62 +441,349 @@ function testoGiorni(g) {
 
 // Finanze ────────────────────────────
 
-function vistaFinanze(main, query) {
-  const mese = (query && query.get('mese')) || meseDefault();
-  const f = calcFinanze(mese);
-  const mesiMedia = numPar('Mesi per la media (simulazione)', 3);
-  const catSpesa = (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa' && c.nome !== DA_ASSEGNARE).map(c => c.nome);
-  const recenti = righe('Movimenti').slice().sort((a, b) => (a.Data < b.Data ? 1 : -1)).slice(0, 8);
-  const delta = f.spesoPrec ? (f.speso - f.spesoPrec) / f.spesoPrec : 0;
-  const daAss = righe('Movimenti').filter(m => (m.Categoria || '').trim() === DA_ASSEGNARE).length;
-  const resta = f.budget ? f.budget - f.proiezione : null;
-  const catMese = f.categorie.filter(c => c.speso > 0.5).sort((a, b) => b.speso - a.speso);
+// v15.1 (SPEC-v15.1, foto 91-92): Panoramica con l'interruttore "Un mese | Un periodo"; tutta la pagina segue la scelta.
+// Un mese: numeri del mese, andamento giorno per giorno, dove vanno i soldi del mese, fisse e variabili del mese.
+// Un periodo (ultimi 12 mesi, anno, da sempre): quadro, risparmio accumulato, dove vanno i soldi, fisse e variabili,
+// mese per mese con i chip delle categorie (tocco su un mese = "Un mese"). Tocco su una categoria = dettaglio sotto la riga.
+// Grafici in SVG fatti a mano (WebView 114 del tablet). Lo stato resta nell'indirizzo (replaceState, senza ridisegni).
 
-  main.innerHTML = `
-    <div class="testata"><h1>Finanze</h1>${selettoreMese('finanze', mese)}</div>
-    ${schedeFinanze('finanze')}
-    ${f.avviso ? `<div class="avviso-box"><strong>Occhio:</strong> a questo ritmo il mese chiude a ${euro0.format(f.proiezione)}, oltre il budget di ${euro0.format(f.budget)}.</div>` : ''}
-    <div class="griglia-2">
-      <a class="carta" href="#/movimenti?mese=${mese}"><div class="etichetta">Speso</div>
-        <div class="grande num">${euro0.format(f.speso)}</div>
-        <div class="riga2">vs ${nomeMese(f.inCorso ? spostaMese(mese, -1) : spostaMese(mese, -1), true)} <span class="${delta > 0 ? 'testo-giallo' : 'testo-verde'}">${delta > 0 ? '+' : ''}${pct.format(delta)}</span></div></a>
-      <a class="carta" href="#/budget"><div class="etichetta">${f.inCorso ? 'Fine mese vs budget' : 'Vs budget'}</div>
-        <div class="grande num">${f.budget ? '/ ' + euro0.format(f.budget) : '—'}</div>
-        <div class="riga2 ${resta == null ? '' : resta >= 0 ? 'testo-verde' : 'testo-giallo'}">${resta == null ? 'imposta i budget' : (resta >= 0 ? 'restano ' : 'sfori di ') + euro0.format(Math.abs(resta))}</div></a>
-      <div class="carta"><div class="etichetta">Risparmio</div>
-        <div class="grande num ${f.risparmio < 0 ? 'testo-giallo' : 'testo-verde'}">${f.risparmio >= 0 ? '+' : ''}${euro0.format(f.risparmio)}</div>
-        <div class="riga2">entrate ${euro0.format(f.entrate)}</div></div>
-      <a class="carta ${daAss ? 'evidenza' : ''}" href="#/movimenti?filtro=assegnare"><div class="etichetta">Da assegnare</div>
-        <div class="grande num ${daAss ? 'testo-giallo' : 'testo-verde'}">${daAss}</div>
-        <div class="riga2">${daAss ? 'tocca per sistemarli' : 'tutto a posto'}</div></a>
-    </div>
+const COLORI_CAT = ['#8ab4f8', '#f6ae6b', '#81c995', '#b39ddb', '#e6c86e', '#7fd4ff', '#4fc3a1', '#f48fb1', '#f28b82', '#b0bec5', '#78909c', '#d7a86e', '#9fa8da'];
+const MESI_B = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+const MESI_L = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+const statoPan = { chiaveQ: null, modo: 'mese', mese: '', periodo: '12', cat: '' };
 
-    <h2>Categorie · ${nomeMese(mese)}</h2>
-    <ul class="elenco carta">${catMese.length ? catMese.map(c => `<li class="toccabile" data-cat="${esc(c.nome)}">
-      <div class="corpo">${esc(c.nome)}</div>
-      <div class="num ${c.budget && c.speso > c.budget ? 'testo-giallo' : ''}">${euro0.format(c.speso)}${c.budget ? ' <span class="piccolo">/ ' + euro0.format(c.budget) + '</span>' : ''}</div></li>`).join('')
-      : '<li class="vuoto">Nessuna spesa nel mese.</li>'}
-      <li class="toccabile" data-vai="#/movimenti?mese=${mese}"><div class="corpo piccolo">tocca una categoria → movimenti</div><div>›</div></li></ul>
-    <div class="azioni azioni-riga"><a class="bottone" href="#/movimenti?mese=${mese}">Tutti i movimenti</a><a class="bottone" href="#/bollette">Bollette e utenze</a><a class="bottone" href="#/budget">Budget</a><a class="bottone" href="#/mutuo">Mutuo</a></div>
+/** Spesa "fissa": arriva comunque (rata del mutuo, condominio, utenze, assicurazioni, bollo, telefono e abbonamenti). */
+function spesaFissa(m) {
+  return m.c === 'Telefono e abbonamenti' || /rata mutuo|condominio|iren|soris|polizza|assicurazion|bollo/.test(normalizza(m.t));
+}
 
-    ${sezioneDaAssegnare()}
-
-    <h2>Ultimi movimenti</h2>
-    <ul class="elenco carta">${recenti.length ? recenti.map(m => `<li>
-      <div class="corpo"><div>${esc(m.Descrizione)}</div><div class="sotto">${dataBreve(m.Data)} · ${esc(m.Categoria || 'senza categoria')}</div></div>
-      <div class="num ${n(m['Importo (uscite negative)']) > 0 ? 'testo-verde' : ''}">${euro.format(n(m['Importo (uscite negative)']))}</div>
-      <button class="piccolo-b" data-elimina="${esc(m.ID)}" title="Elimina">✕</button></li>`).join('') : '<li class="vuoto">Nessun movimento: arrivano dall\'import della banca (cartella "Movimenti banca").</li>'}</ul>
-    ${bottonePenna('Movimenti')}`;
-
-  // v10 §7: niente più "Spesa veloce" (un movimento scritto a mano si sommava a quello importato dalla banca).
-  collegaMese(main);
-  $$('[data-cat]', main).forEach(li => {
-    li.onclick = () => { location.hash = '#/movimenti?mese=' + mese + '&categoria=' + encodeURIComponent(li.dataset.cat); };
+/** Movimenti semplificati per la Panoramica: d data, v importo, c categoria, t descrizione, tipo Spesa/Entrata/Risparmio. */
+function movFin() {
+  return righe('Movimenti').filter(m => m.Data).map(m => {
+    const c = (m.Categoria || '').trim();
+    return { d: String(m.Data).slice(0, 10), v: n(m['Importo (uscite negative)']), c: c || 'Senza categoria', t: m.Descrizione || '', tipo: tipoCat(c), id: m.ID };
   });
-  $$('[data-vai]', main).forEach(li => { li.onclick = () => { location.hash = li.dataset.vai; }; });
-  collegaElimina(main, 'Movimenti');
+}
+
+function mesiFin(mov) {
+  const s = {};
+  mov.forEach(m => { s[m.d.slice(0, 7)] = 1; });
+  return Object.keys(s).sort();
+}
+
+/** Mese da aprire: il corrente se ha già movimenti, altrimenti l'ultimo importato. */
+function meseFinDefault(mesi) {
+  const cor = chiave(new Date()).slice(0, 7);
+  return mesi.indexOf(cor) >= 0 || !mesi.length ? cor : mesi[mesi.length - 1];
+}
+
+function perMeseFin(mov, mesi) {
+  const idx = {};
+  const r = mesi.map((k, i) => { idx[k] = i; return { k, e: 0, s: 0, fis: 0, cat: {} }; });
+  mov.forEach(m => {
+    const x = r[idx[m.d.slice(0, 7)]];
+    if (!x) return;
+    if (m.tipo === 'Entrata') x.e += m.v;
+    else if (m.tipo === 'Spesa') { x.s -= m.v; x.cat[m.c] = (x.cat[m.c] || 0) - m.v; if (spesaFissa(m)) x.fis -= m.v; }
+  });
+  return r;
+}
+
+const mb = k => MESI_B[Number(k.slice(5, 7)) - 1];
+const ml = k => MESI_L[Number(k.slice(5, 7)) - 1];
+// v15.1: con il punto delle migliaia anche sotto 10.000 (Intl in italiano scrive "1778 €")
+const eu = x => { const r = Math.round(x), s = String(Math.abs(r)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); return (r < 0 ? '−' : '') + s + ' €'; };
+const piuMeno = x => (x > 0 ? '+' : '') + Math.round(x * 100) + '%';
+function scalaFin(max) { const p = Math.pow(10, Math.floor(Math.log(max) / Math.LN10)); return max / p > 5 ? p : max / p > 2 ? p / 2 : p / 5; }
+const numAsse = v => new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 }).format(v);
+
+function graficoLinea(W, H, punti, opz) {
+  const pl = 52, pr = 16, pt = 18, pb = 28, k = punti.length;
+  let max = Math.max(1, ...punti.map(p => p.y)), min = Math.min(0, ...punti.map(p => p.y));
+  if (opz.rif) max = Math.max(max, opz.rif);
+  const passo = scalaFin(max - min || 1);
+  max = Math.ceil(max / passo) * passo; min = Math.floor(min / passo) * passo;
+  const X = i => pl + (W - pl - pr) * (k === 1 ? 0.5 : i / (k - 1));
+  const Y = v => pt + (H - pt - pb) * (1 - (v - min) / (max - min || 1));
+  let s = '';
+  for (let v = min; v <= max + 0.1; v += passo) s += `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#333a43"${v ? ' stroke-dasharray="2 4"' : ''}/><text x="${pl - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="12" fill="#9aa0a6">${numAsse(v)}</text>`;
+  if (opz.rif) s += `<line x1="${pl}" x2="${W - pr}" y1="${Y(opz.rif)}" y2="${Y(opz.rif)}" stroke="#fdd663" stroke-dasharray="5 5" opacity=".7"/><text x="${W - pr}" y="${Y(opz.rif) - 5}" text-anchor="end" font-size="12" fill="#fdd663">${esc(opz.rifTesto || '')}</text>`;
+  const d = punti.map((p, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.y).toFixed(1)).join('');
+  s += `<path d="${d}L${X(k - 1)} ${Y(Math.max(min, 0))}L${X(0)} ${Y(Math.max(min, 0))}Z" fill="${opz.col}" opacity=".12"/><path d="${d}" fill="none" stroke="${opz.col}" stroke-width="2.5" stroke-linejoin="round"/>`;
+  punti.forEach((p, i) => {
+    s += `<circle cx="${X(i)}" cy="${Y(p.y)}" r="${i === k - 1 ? 5 : 3}" fill="${opz.col}"/>`;
+    if (!opz.ogni || i % opz.ogni === 0 || i === k - 1) s += `<text x="${X(i)}" y="${H - 8}" text-anchor="middle" font-size="12" fill="#9aa0a6">${esc(p.x)}</text>`;
+    if (p.nota) s += `<text x="${X(i)}" y="${Y(p.y) - 10}" text-anchor="middle" font-size="12" fill="#e8eaed">${esc(p.nota)}</text>`;
+  });
+  return `<svg class="grafico-fin" viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+/** Barre mese per mese: senza categoria entrate (verde) e spese (blu); con una categoria solo le sue spese. Tocco = quel mese. */
+function graficoMesi(W, H, pm, scelto, cat, budget, colore) {
+  const pl = 52, pr = 10, pt = 14, pb = 28, k = pm.length, slot = (W - pl - pr) / Math.max(1, k), bw = Math.min(cat ? 26 : 16, slot * (cat ? 0.5 : 0.32));
+  const max = Math.max(1, budget || 0, ...pm.map(d => cat ? (d.cat[cat] || 0) : Math.max(d.e, d.s))) * 1.08, passo = scalaFin(max);
+  const Y = v => pt + (H - pt - pb) * (1 - v / max);
+  let s = '';
+  for (let v = 0; v < max; v += passo) s += `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#333a43"${v ? ' stroke-dasharray="2 4"' : ''}/><text x="${pl - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="12" fill="#9aa0a6">${numAsse(v)}</text>`;
+  if (budget) s += `<line x1="${pl}" x2="${W - pr}" y1="${Y(budget)}" y2="${Y(budget)}" stroke="#fdd663" stroke-dasharray="5 5" opacity=".7"/><text x="${pl + 4}" y="${Y(budget) - 5}" font-size="12" fill="#fdd663">budget ${eu(budget)}</text>`;
+  pm.forEach((d, i) => {
+    const cx = pl + slot * (i + 0.5), on = d.k === scelto, op = on || !scelto ? 1 : 0.55;
+    if (on) s += `<rect x="${cx - slot / 2 + 2}" y="${pt - 6}" width="${slot - 4}" height="${H - pt - pb + 10}" rx="8" fill="rgba(138,180,248,.08)" stroke="#8ab4f8" stroke-opacity=".6"/>`;
+    if (cat) { const y = d.cat[cat] || 0; s += `<rect x="${cx - bw / 2}" y="${Y(y)}" width="${bw}" height="${Y(0) - Y(y)}" rx="3" fill="${colore}" opacity="${op}"/>`; }
+    else s += `<rect x="${cx - bw - 1}" y="${Y(d.e)}" width="${bw}" height="${Y(0) - Y(d.e)}" rx="3" fill="#81c995" opacity="${op}"/><rect x="${cx + 1}" y="${Y(d.s)}" width="${bw}" height="${Y(0) - Y(d.s)}" rx="3" fill="#8ab4f8" opacity="${op}"/>`;
+    s += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="12" fill="${on ? '#e8eaed' : '#9aa0a6'}">${k > 14 && i % 2 ? '' : mb(d.k)}</text>`;
+    s += `<rect data-pan-mese="${d.k}" x="${cx - slot / 2}" y="0" width="${slot}" height="${H}" fill="transparent" style="cursor:pointer"/>`;
+  });
+  return `<svg class="grafico-fin" viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+/** Striscia dei mesi sotto il selettore (vista "Un mese"): barre della spesa, gialle sopra budget; tocco = quel mese. */
+function strisciaMesiFin(W, H, pm, scelto, budget) {
+  if (window.innerWidth < 600) { W = 360; H = 70; }   // su telefono: scritte dei mesi leggibili
+  const vis = pm.slice(window.innerWidth < 600 ? -12 : -18), k = vis.length, slot = W / Math.max(1, k), max = Math.max(1, budget || 0, ...vis.map(d => d.s)) * 1.05;
+  let s = budget ? `<line x1="0" x2="${W}" y1="${(H - 18) * (1 - budget / max)}" y2="${(H - 18) * (1 - budget / max)}" stroke="#fdd663" stroke-dasharray="4 4" opacity=".6"/>` : '';
+  vis.forEach((d, i) => {
+    const cx = slot * (i + 0.5), h = (H - 18) * d.s / max, on = d.k === scelto;
+    s += `<rect x="${cx - slot * 0.32}" y="${H - 18 - h}" width="${slot * 0.64}" height="${h}" rx="3" fill="${budget && d.s > budget ? '#fdd663' : '#8ab4f8'}" opacity="${on ? 1 : 0.35}"/>`;
+    s += `<text x="${cx}" y="${H - 3}" text-anchor="middle" font-size="12" fill="${on ? '#e8eaed' : '#9aa0a6'}" font-weight="${on ? 700 : 400}">${mb(d.k)}</text>`;
+    s += `<rect data-pan-mese="${d.k}" x="${cx - slot / 2}" y="0" width="${slot}" height="${H}" fill="transparent" style="cursor:pointer"/>`;
+  });
+  return `<svg class="grafico-fin" viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+function miniBarre(valori, col, sel) {
+  const W = 120, H = 26, max = Math.max(1, ...valori), bw = W / Math.max(1, valori.length);
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" class="mini-barre">` + valori.map((v, i) => {
+    const h = Math.max(1, v / max * (H - 2));
+    return `<rect x="${i * bw + 1}" y="${H - h}" width="${Math.max(1, bw - 2)}" height="${h}" rx="1" fill="${col}" opacity="${sel == null ? (i === valori.length - 1 ? 1 : 0.6) : i === sel ? 1 : 0.35}"/>`;
+  }).join('') + '</svg>';
+}
+
+/** Spesa sommata giorno per giorno nel mese (solo una categoria se data). */
+function cumulataFin(mov, mese, cat) {
+  const g = new Date(Number(mese.slice(0, 4)), Number(mese.slice(5, 7)), 0).getDate(), per = new Array(g).fill(0);
+  mov.forEach(m => { if (m.tipo === 'Spesa' && m.d.slice(0, 7) === mese && (!cat || m.c === cat)) per[Number(m.d.slice(8, 10)) - 1] -= m.v; });
+  const oggi = chiave(new Date());
+  const fino = mese === oggi.slice(0, 7) ? Number(oggi.slice(8, 10)) : g;
+  const a = []; let t = 0;
+  for (let i = 0; i < fino; i++) { t += per[i]; a.push(t); }
+  return a;
+}
+
+function graficoAndamento(W, H, a, b, budget, col, piccolo) {
+  const k = 31, pl = piccolo ? 8 : 52, pr = piccolo ? 8 : 16, pt = 14, pb = piccolo ? 18 : 26;
+  const fine = v => v.length ? v[v.length - 1] : 0;
+  const max = Math.max(budget || 0, fine(a), fine(b), 1) * 1.1, passo = scalaFin(max);
+  const X = i => pl + (W - pl - pr) * i / (k - 1), Y = v => pt + (H - pt - pb) * (1 - v / max);
+  let s = '';
+  if (!piccolo) for (let v = 0; v < max; v += passo) s += `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#333a43"${v ? ' stroke-dasharray="2 4"' : ''}/><text x="${pl - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="12" fill="#9aa0a6">${numAsse(v)}</text>`;
+  if (budget) s += `<line x1="${pl}" x2="${W - pr}" y1="${Y(budget)}" y2="${Y(budget)}" stroke="#fdd663" stroke-dasharray="5 5" opacity=".7"/>`;
+  const p = arr => arr.map((v, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join('');
+  if (b.length) s += `<path d="${p(b)}" fill="none" stroke="#9aa0a6" stroke-width="1.6" stroke-dasharray="3 4"/>`;
+  if (a.length) {
+    s += `<path d="${p(a)}L${X(a.length - 1)} ${Y(0)}L${X(0)} ${Y(0)}Z" fill="${col}" opacity=".12"/><path d="${p(a)}" fill="none" stroke="${col}" stroke-width="2.5"/>`;
+    s += `<circle cx="${X(a.length - 1)}" cy="${Y(fine(a))}" r="5" fill="#e8eaed"/>`;
+    if (!piccolo) s += `<text x="${X(a.length - 1) - 8}" y="${Y(fine(a)) - 10}" text-anchor="end" font-size="13" fill="#e8eaed">${eu(fine(a))}</text>`;
+  }
+  [1, 8, 15, 22, 29].forEach(g => { s += `<text x="${X(g - 1)}" y="${H - 4}" text-anchor="middle" font-size="12" fill="#9aa0a6">${g}</text>`; });
+  return `<svg class="grafico-fin" viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+function mesiDelPeriodo(mesi, periodo, ultimo) {
+  if (periodo === 'tutto') return mesi.slice();
+  if (periodo === '12') { const da = spostaMese(ultimo, -12); return mesi.filter(k => k > da && k <= ultimo); }
+  return mesi.filter(k => k.slice(0, 4) === periodo);
+}
+
+function vistaFinanze(main, query) {
+  const q = query || new URLSearchParams();
+  const chiaveQ = q.toString();
+  if (statoPan.chiaveQ !== chiaveQ) {
+    // Arrivo da un link (tablet, Oggi): i parametri impostano la vista; poi restano le scelte fatte sulla pagina.
+    statoPan.chiaveQ = chiaveQ;
+    statoPan.modo = q.get('periodo') ? 'periodo' : 'mese';
+    statoPan.mese = q.get('mese') || '';
+    statoPan.periodo = q.get('periodo') || statoPan.periodo || '12';
+    statoPan.cat = q.get('cat') || '';
+  }
+  disegnaFinanze(main);
+  if (q.get('vista') === 'assegna' && $('#da-assegnare', main)) setTimeout(() => $('#da-assegnare', main).scrollIntoView(), 0);
+}
+
+function disegnaFinanze(main) {
+  const st = statoPan, mov = movFin(), mesi = mesiFin(mov);
+  if (!mesi.length) {
+    main.innerHTML = `<div class="testata"><h1>Finanze</h1></div>${schedeFinanze('finanze')}
+      <div class="carta piccolo">Nessun movimento: arrivano dall'import della banca (cartella "Movimenti banca").</div>${sezioneDaAssegnare()}${bottonePenna('Movimenti')}`;
+    collegaDaAssegnare(main);
+    return;
+  }
+  const ultimo = meseFinDefault(mesi);
+  if (mesi.indexOf(ultimo) < 0) mesi.push(ultimo);
+  if (!st.mese || mesi.indexOf(st.mese) < 0) st.mese = ultimo;
+  const unMese = st.modo === 'mese';
+  const budget = budgetTotale() || 0;
+  const catInfo = {};
+  (dati.categorie || []).filter(c => (c.tipo || 'Spesa') === 'Spesa').forEach((c, i) => { catInfo[c.nome] = { budget: n(c.budget) || 0, col: COLORI_CAT[i % COLORI_CAT.length] }; });
+  const info = c => catInfo[c] || (catInfo[c] = { budget: 0, col: '#9aa0a6' });
+  const pmT = perMeseFin(mov, mesi);
+  const ms = unMese ? [st.mese] : mesiDelPeriodo(mesi, st.periodo, ultimo);
+  if (!ms.length) { st.periodo = '12'; return disegnaFinanze(main); }
+  const pm = perMeseFin(mov, ms), nM = ms.length;
+  let E = 0, S = 0, F = 0; const cat = {};
+  pm.forEach(x => { E += x.e; S += x.s; F += x.fis; Object.keys(x.cat).forEach(c => { cat[c] = (cat[c] || 0) + x.cat[c]; }); });
+  const R = E - S, tasso = E ? R / E : 0, Sx = S || 1;
+  const cats = Object.keys(cat).filter(c => cat[c] > 0.5).sort((a, b) => cat[b] - cat[a]);
+  const chiusi = pmT.filter(x => x.k !== chiave(new Date()).slice(0, 7));
+  const base = chiusi.length ? chiusi : pmT;
+  const medS = base.reduce((t, y) => t + y.s, 0) / base.length;
+  const medCat = c => base.reduce((t, y) => t + (y.cat[c] || 0), 0) / base.length;
+  const iT = mesi.indexOf(st.mese), prec = iT > 0 ? pmT[iT - 1] : null;
+  const inCorso = st.mese === chiave(new Date()).slice(0, 7);
+  const periodi = [['12', 'Ultimi 12 mesi']].concat(mesi.map(k => k.slice(0, 4)).filter((y, i, a) => a.indexOf(y) === i).reverse().map(y => [y, y])).concat([['tutto', 'Da sempre']]);
+  const daAss = mov.filter(m => m.c === DA_ASSEGNARE).length;
+
+  let h = `<div class="testata"><h1>Finanze</h1></div>${schedeFinanze('finanze')}`;
+
+  // ── interruttore in cima ──
+  h += `<div class="carta pan-sel"><div class="testata">
+      <div class="segm"><button type="button" data-pan-modo="mese" class="${unMese ? 'on' : ''}">Un mese</button><button type="button" data-pan-modo="periodo" class="${unMese ? '' : 'on'}">Un periodo</button></div>
+      ${unMese ? `<div class="mese-sel"><button type="button" class="piccolo-b" data-pan-sposta="-1" ${iT <= 0 ? 'disabled' : ''} aria-label="Mese prima">‹</button><span>${nomeMese(st.mese)}</span><button type="button" class="piccolo-b" data-pan-sposta="1" ${iT >= mesi.length - 1 ? 'disabled' : ''} aria-label="Mese dopo">›</button></div>`
+        : `<div class="chips">${periodi.map(p => `<button type="button" class="chip ${st.periodo === p[0] ? 'attivo' : ''}" data-pan-periodo="${p[0]}">${p[1]}</button>`).join('')}</div>`}</div>
+    ${unMese ? strisciaMesiFin(940, 84, pmT, st.mese, budget) + `<div class="piccolo">${inCorso ? 'mese in corso' : st.mese === mesi[mesi.length - 1] ? 'ultimo mese con i movimenti importati' : 'mese chiuso'} · tocca una barra per cambiare mese${budget ? ' · <span class="testo-giallo">┅ budget</span>' : ''}</div>`
+      : `<div class="piccolo" style="margin-top:8px">${st.periodo === 'tutto' ? 'da sempre' : st.periodo === '12' ? 'ultimi 12 mesi' : 'anno ' + st.periodo} · ${mb(ms[0])} ${ms[0].slice(0, 4)} – ${mb(ms[nM - 1])} ${ms[nM - 1].slice(0, 4)} (${nM} ${nM === 1 ? 'mese' : 'mesi'})</div>`}</div>`;
+  if (daAss) h += `<a class="carta evidenza riga-avviso" href="#/finanze?vista=assegna"><strong class="testo-giallo">${daAss} da assegnare</strong> <span class="piccolo">tocca per sistemarli</span></a>`;
+
+  // ── numeri e grafico principale ──
+  if (unMese) {
+    const x = pm[0], quota = budget ? Math.min(1, x.s / budget) : 0;
+    const a = cumulataFin(mov, st.mese, ''), b = prec ? cumulataFin(mov, prec.k, '') : [];
+    const sup = budget ? a.findIndex(v => v > budget) : -1;
+    h += `<div class="griglia-2 pan-kpi">
+      <div class="carta"><div class="etichetta">Speso</div><div class="grande num">${eu(x.s)}</div><div class="riga2">${prec ? 'vs ' + mb(prec.k) + ' ' + eu(prec.s) + (prec.s ? ` <span class="${x.s > prec.s ? 'testo-giallo' : 'testo-verde'}">${piuMeno((x.s - prec.s) / prec.s)}</span>` : '') : ''}</div></div>
+      <div class="carta"><div class="etichetta">Budget ${budget ? eu(budget) : ''}</div>${budget ? `<div class="grande num ${x.s > budget ? 'testo-giallo' : 'testo-verde'}">${x.s > budget ? 'sfori ' : 'restano '}${eu(Math.abs(budget - x.s))}</div>
+        <div class="avanz"><span style="width:${quota * 100}%;background:${x.s > budget ? 'var(--giallo)' : 'var(--accento)'}"></span></div>` : '<div class="grande piccolo"><a href="#/budget">imposta i budget</a></div>'}
+        <div class="riga2">media dei mesi ${eu(medS)}${medS ? ' (' + piuMeno((x.s - medS) / medS) + ')' : ''}</div></div>
+      <div class="carta"><div class="etichetta">Risparmio</div><div class="grande num ${R >= 0 ? 'testo-verde' : 'testo-giallo'}">${R >= 0 ? '+' : ''}${eu(R)}</div><div class="riga2">entrate ${eu(E)}${E ? ' · tasso ' + Math.round(tasso * 100) + '%' : ''}</div></div>
+      <div class="carta"><div class="etichetta">Spese fisse</div><div class="grande num">${eu(F)}</div><div class="riga2">${Math.round(F / Sx * 100)}% del mese · variabili ${eu(S - F)}</div></div></div>
+    <div class="carta" style="margin-top:12px"><div class="etichetta">Andamento del mese</div>
+      <div class="piccolo">spesa sommata giorno per giorno · ━ ${ml(st.mese)}${prec ? ' · ┅ ' + ml(prec.k) : ''}${budget ? ' · <span class="testo-giallo">┅ budget</span>' : ''}</div>
+      ${graficoAndamento(940, 220, a, b, budget, '#8ab4f8', false)}
+      <p class="piccolo">${a.length >= 15 ? `A metà mese avevi speso <strong>${eu(a[14])}</strong>${b.length >= 15 ? ` (il mese prima ${eu(b[14])})` : ''}. ` : ''}In media <strong>${eu(x.s / Math.max(1, a.length))} al giorno</strong>${sup >= 0 ? `; budget superato il <strong>${sup + 1}</strong>` : ''}${inCorso && a.length ? `; a questo ritmo il mese chiude a <strong>${eu(x.s / a.length * new Date(Number(st.mese.slice(0, 4)), Number(st.mese.slice(5, 7)), 0).getDate())}</strong>` : ''}.</p></div>`;
+  } else {
+    h += `<div class="griglia-2 pan-kpi">
+      <div class="carta"><div class="etichetta">Entrate</div><div class="grande num testo-verde">${eu(E)}</div><div class="riga2">media ${eu(E / nM)} al mese</div></div>
+      <div class="carta"><div class="etichetta">Spese</div><div class="grande num">${eu(S)}</div><div class="riga2">media ${eu(S / nM)} al mese</div></div>
+      <div class="carta"><div class="etichetta">Risparmio</div><div class="grande num ${R >= 0 ? 'testo-verde' : 'testo-giallo'}">${R >= 0 ? '+' : ''}${eu(R)}</div><div class="riga2">tasso ${Math.round(tasso * 100)}% delle entrate</div></div>
+      <div class="carta"><div class="etichetta">Spese fisse</div><div class="grande num">${Math.round(F / Sx * 100)}%</div><div class="riga2">${eu(F / nM)} al mese, certe</div></div></div>`;
+    const ord = pm.slice().sort((p1, p2) => p2.s - p1.s), alto = ord[0], basso = ord[ord.length - 1];
+    let acc = 0;
+    const punti = pm.map(y => { acc += y.e - y.s; return { x: mb(y.k), y: acc }; });
+    punti[punti.length - 1].nota = (acc >= 0 ? '+' : '') + eu(acc);
+    const senzaEntrate = pm.filter(y => !y.e).map(y => ml(y.k));
+    h += `<div class="carta" style="margin-top:12px"><div class="etichetta">Risparmio accumulato</div>${graficoLinea(940, 220, punti, { col: '#81c995', ogni: nM > 14 ? 2 : 1 })}
+      <p class="piccolo">${R >= 0 ? 'Le entrate superano le spese di' : 'Le spese superano le entrate di'} <strong>${eu(Math.abs(R))}</strong> nel periodo.${nM > 1 ? ` Il mese più caro è stato <strong>${ml(alto.k)}</strong> (${eu(alto.s)}), il più leggero <strong>${ml(basso.k)}</strong> (${eu(basso.s)}).` : ''}${senzaEntrate.length && senzaEntrate.length < nM ? ` Senza entrate: <strong>${senzaEntrate.join(', ')}</strong> (lo stipendio può arrivare il primo del mese dopo).` : ''}</p></div>`;
+  }
+
+  // ── dove vanno i soldi ──
+  h += `<h2>Dove vanno i soldi</h2><p class="piccolo sotto-h2">${unMese ? nomeMese(st.mese) : 'nel periodo'} · tocca una categoria per il dettaglio</p><div class="carta">
+    <div class="pila">${cats.map(c => `<span style="width:${(cat[c] / Sx * 100).toFixed(2)}%;background:${info(c).col}"></span>`).join('')}</div>
+    <table class="tab-fin"><tr><th>Categoria</th><th>${unMese ? 'Speso' : 'Totale'}</th><th>%</th>${unMese ? '<th>Budget</th><th class="nascondi-tel">Vs media</th>' : '<th class="nascondi-tel">Al mese</th><th class="nascondi-tel">Budget</th>'}<th class="nascondi-tel">Mese per mese</th></tr>`;
+  cats.forEach(c => {
+    const bud = info(c).budget, mc = medCat(c), val = unMese ? cat[c] : cat[c] / nM;
+    const serie = (unMese ? pmT.slice(-12) : pm).map(y => y.cat[c] || 0);
+    const selSerie = unMese ? (unMese ? Math.min(11, pmT.slice(-12).findIndex(y => y.k === st.mese)) : null) : null;
+    h += `<tr class="riga ${st.cat === c ? 'aperta' : ''}" data-pan-cat="${esc(c)}"><td><span class="pallino" style="background:${info(c).col}"></span>${esc(c)}</td>
+      <td class="num">${eu(cat[c])}</td><td class="num piccolo">${Math.round(cat[c] / Sx * 100)}%</td>
+      ${unMese ? `<td class="num ${bud ? (val > bud ? 'testo-giallo' : 'testo-verde') : 'piccolo'}">${bud ? '/ ' + eu(bud) : '—'}</td><td class="num nascondi-tel ${mc && val > mc * 1.1 ? 'testo-giallo' : mc && val < mc * 0.9 ? 'testo-verde' : 'piccolo'}">${mc ? piuMeno((val - mc) / mc) : '—'}</td>`
+        : `<td class="num nascondi-tel">${eu(val)}</td><td class="num nascondi-tel ${bud ? (val > bud * 1.05 ? 'testo-giallo' : 'testo-verde') : 'piccolo'}">${bud ? eu(bud) : '—'}</td>`}
+      <td class="nascondi-tel">${miniBarre(serie, info(c).col, selSerie != null && selSerie >= 0 ? selSerie : null)}</td></tr>`;
+    if (st.cat === c) h += unMese ? dettaglioCatMeseFin(mov, c, cat[c], mc, bud, info(c).col, st.mese, prec) : dettaglioCatPeriodoFin(mov, c, ms, pm, cat[c], nM, bud, info(c).col);
+  });
+  const sopra = cats.filter(c => info(c).budget && (unMese ? cat[c] : cat[c] / nM) > info(c).budget * (unMese ? 1 : 1.05));
+  h += `</table><p class="piccolo">${sopra.length ? (unMese ? 'Sopra il budget nel mese: ' : 'Sopra il budget in media: ') + sopra.map(c => `<strong>${esc(c)}</strong> (${eu(unMese ? cat[c] : cat[c] / nM)} contro ${eu(info(c).budget)})`).join(', ') + '.' : 'Tutte le categorie con budget sono in linea.'}${cats.length > 2 ? ` Le prime tre categorie fanno il <strong>${Math.round((cat[cats[0]] + cat[cats[1]] + cat[cats[2]]) / Sx * 100)}%</strong> delle spese.` : ''}</p></div>`;
+
+  // ── fisse e variabili ──
+  const voci = {};
+  mov.forEach(m => {
+    if (m.tipo !== 'Spesa' || !spesaFissa(m) || ms.indexOf(m.d.slice(0, 7)) < 0) return;
+    const t = normalizza(m.t);
+    const nome = /rata mutuo/.test(t) ? 'Rata del mutuo' : /condominio box|box/.test(t) && /condominio/.test(t) ? 'Condominio box' : /condominio/.test(t) ? 'Condominio casa'
+      : /iren/.test(t) ? 'Iren (luce e gas)' : /soris/.test(t) ? 'Rifiuti (Soris)' : /polizza|assicurazion/.test(t) ? 'Assicurazioni' : /bollo/.test(t) ? 'Bollo auto' : 'Telefono e abbonamenti';
+    voci[nome] = (voci[nome] || 0) - m.v;
+  });
+  const vk = Object.keys(voci).filter(k => voci[k] > 0.5).sort((p1, p2) => voci[p2] - voci[p1]);
+  const serieVar = (unMese ? pmT.slice(-12) : pm).map(y => ({ x: mb(y.k), y: y.s - y.fis }));
+  const medVar = base.reduce((t, y) => t + y.s - y.fis, 0) / base.length;
+  h += `<h2>Fisse e variabili</h2><p class="piccolo sotto-h2">quelle che arrivano comunque (rata, condominio, utenze, assicurazioni, bollo, telefono e abbonamenti) e quelle che decidi tu</p>
+    <div class="carta fisse-var"><div>
+      <div class="etichetta">Fisse ${eu(F)} · variabili ${eu(S - F)}</div>
+      <div class="barra-fv"><span style="width:${F / Sx * 100}%;background:#8ab4f8"></span><span style="width:${100 - F / Sx * 100}%;background:#f6ae6b"></span></div>
+      ${unMese ? `<div class="riga2">variabili del mese <strong class="${S - F > medVar ? 'testo-giallo' : 'testo-verde'}">${medVar ? piuMeno((S - F - medVar) / medVar) : '—'}</strong> rispetto alla media (${eu(medVar)})</div>`
+        : `<div class="riga2"><span class="pallino" style="background:#8ab4f8"></span>fisse ${eu(F / nM)}/mese · <span class="pallino" style="background:#f6ae6b"></span>variabili ${eu((S - F) / nM)}/mese</div>`}
+      <div class="etichetta" style="margin-top:14px">Variabili mese per mese</div>
+      ${graficoLinea(440, 150, serieVar, { col: '#f6ae6b', ogni: 3, rif: medVar, rifTesto: 'media' })}
+      ${unMese ? '' : `<p class="piccolo">Le variabili sono il margine vero: <strong>−10%</strong> vale <strong>${eu((S - F) * 0.1 / nM * 12)} all'anno</strong>.</p>`}</div>
+      <ul class="elenco">${vk.length ? vk.map(k => `<li><div class="corpo">${k}</div><div class="num">${eu(voci[k])}${unMese ? '' : ` <span class="piccolo">· ${eu(voci[k] / nM)}/mese</span>`}</div></li>`).join('') : '<li class="vuoto">Nessuna spesa fissa.</li>'}</ul></div>`;
+
+  // ── solo nel periodo: mese per mese con le categorie (tocco su un mese = "Un mese") ──
+  if (!unMese) {
+    const c = st.cat, catsP = cats.slice();
+    h += `<h2>Mese per mese</h2><p class="piccolo sotto-h2">${c ? `spese di <strong style="color:${info(c).col}">${esc(c)}</strong>` : 'entrate <span class="pallino" style="background:#81c995"></span> spese <span class="pallino" style="background:#8ab4f8"></span>'} · tocca un mese per aprirlo</p>
+      <div class="chips"><button type="button" class="chip ${c ? '' : 'attivo'}" data-pan-filtro="">Tutte</button>${catsP.map(k => `<button type="button" class="chip ${c === k ? 'attivo' : ''}" data-pan-filtro="${esc(k)}"><span class="pallino" style="background:${info(k).col}"></span>${esc(k)}</button>`).join('')}</div>
+      <div class="carta">${graficoMesi(940, 230, pm, '', c, c ? info(c).budget : budget, c ? info(c).col : '')}</div>`;
+  }
+
+  h += `${sezioneDaAssegnare()}${bottonePenna('Movimenti')}`;
+  main.innerHTML = h;
+  collegaFinanze(main);
+}
+
+function dettaglioCatMeseFin(mov, c, tot, mc, bud, col, mese, prec) {
+  const righeC = mov.filter(m => m.c === c && m.tipo === 'Spesa' && m.d.slice(0, 7) === mese).sort((p1, p2) => (p1.d < p2.d ? 1 : -1));
+  const a = cumulataFin(mov, mese, c), b = prec ? cumulataFin(mov, prec.k, c) : [];
+  return `<tr class="dett-fin"><td colspan="6"><div class="due-col"><div><div class="etichetta">${esc(c)} · ${nomeMese(mese)}</div>
+    ${graficoAndamento(520, 180, a, b, bud, col, false)}
+    <p class="piccolo"><strong>${righeC.length}</strong> spese, in media <strong>${eu(tot / Math.max(1, righeC.length))}</strong> l'una · media dei mesi <strong>${eu(mc)}</strong>${bud ? ' · budget ' + eu(bud) : ''}.</p></div>
+    <div><div class="etichetta">Le spese del mese</div><ul class="elenco">${righeC.slice(0, 8).map(m => `<li><span class="data-riga">${dataBreve(m.d)}</span><div class="corpo">${esc(m.t)}</div><div class="num">${euro.format(-m.v)}</div></li>`).join('')}
+      ${righeC.length > 8 ? `<li class="vuoto">… altre ${righeC.length - 8}</li>` : ''}</ul>
+      <a href="#/movimenti?mese=${mese}&categoria=${encodeURIComponent(c)}">Apri in Movimenti ›</a></div></div></td></tr>`;
+}
+
+function dettaglioCatPeriodoFin(mov, c, ms, pm, tot, nM, bud, col) {
+  const righeC = mov.filter(m => m.c === c && m.tipo === 'Spesa' && m.v < 0 && ms.indexOf(m.d.slice(0, 7)) >= 0);
+  const top = righeC.slice().sort((p1, p2) => p1.v - p2.v).slice(0, 6);
+  const alto = pm.slice().sort((p1, p2) => (p2.cat[c] || 0) - (p1.cat[c] || 0))[0];
+  const punti = pm.map(x => ({ x: mb(x.k), y: x.cat[c] || 0 }));
+  return `<tr class="dett-fin"><td colspan="6"><div class="due-col"><div><div class="etichetta">${esc(c)} · mese per mese</div>
+    ${graficoLinea(520, 170, punti, { col, ogni: nM > 8 ? 2 : 1, rif: bud, rifTesto: 'budget' })}
+    <p class="piccolo"><strong>${righeC.length}</strong> spese, in media <strong>${eu(tot / Math.max(1, righeC.length))}</strong> l'una. Il mese più alto: <strong>${ml(alto.k)}</strong> (${eu(alto.cat[c] || 0)}).${bud ? ` Budget ${eu(bud)}/mese: superato in <strong>${pm.filter(x => (x.cat[c] || 0) > bud).length}</strong> mesi su ${nM}.` : ''}</p></div>
+    <div><div class="etichetta">Le spese più grandi</div><ul class="elenco">${top.map(m => `<li><span class="data-riga">${dataBreve(m.d)}</span><div class="corpo">${esc(m.t)}</div><div class="num">${euro.format(-m.v)}</div></li>`).join('')}</ul>
+      <a href="#/movimenti?mese=tutti&categoria=${encodeURIComponent(c)}">Tutti i ${righeC.length} movimenti di ${esc(c)} ›</a></div></div></td></tr>`;
+}
+
+function collegaFinanze(main) {
+  const st = statoPan;
+  const ridisegna = () => {
+    const y = window.scrollY;
+    // lo stato resta nell'indirizzo (per tornare indietro o ricaricare) senza far ripartire la pagina
+    const p = new URLSearchParams();
+    if (st.modo === 'periodo') p.set('periodo', st.periodo); else p.set('mese', st.mese);
+    if (st.cat) p.set('cat', st.cat);
+    st.chiaveQ = p.toString();
+    history.replaceState(null, '', '#/finanze?' + st.chiaveQ);
+    disegnaFinanze(main);
+    window.scrollTo(0, y);
+  };
+  $$('[data-pan-modo]', main).forEach(b => { b.onclick = () => { st.modo = b.dataset.panModo; st.cat = ''; ridisegna(); }; });
+  $$('[data-pan-periodo]', main).forEach(b => { b.onclick = () => { st.periodo = b.dataset.panPeriodo; ridisegna(); }; });
+  $$('[data-pan-sposta]', main).forEach(b => {
+    b.onclick = () => { const mesi = mesiFin(movFin()), i = mesi.indexOf(st.mese) + Number(b.dataset.panSposta); if (i >= 0 && i < mesi.length) { st.mese = mesi[i]; ridisegna(); } };
+  });
+  $$('[data-pan-mese]', main).forEach(r => { r.onclick = () => { const passa = st.modo !== 'mese'; st.modo = 'mese'; st.mese = r.dataset.panMese; ridisegna(); if (passa) window.scrollTo(0, 0); }; });
+  $$('[data-pan-cat]', main).forEach(r => { r.onclick = () => { st.cat = st.cat === r.dataset.panCat ? '' : r.dataset.panCat; ridisegna(); }; });
+  $$('[data-pan-filtro]', main).forEach(b => { b.onclick = () => { st.cat = b.dataset.panFiltro; ridisegna(); }; });
   collegaDaAssegnare(main);
-  if (query && query.get('vista') === 'assegna' && $('#da-assegnare', main)) setTimeout(() => $('#da-assegnare', main).scrollIntoView(), 0);
 }
 
 // Selettore del mese (Finanze, Movimenti) ────────────────────────────
@@ -565,20 +852,24 @@ function disegnaMovimenti(main) {
   for (let m = chiave(new Date()).slice(0, 7), i = 0; i < 18; i++, m = spostaMese(m, -1)) mesi.push(m);
   const nSel = Object.keys(s.sel).length;
   const sommaSel = l.filter(m => s.sel[m.ID]).reduce((t, m) => t + n(m['Importo (uscite negative)']), 0);
-  const chip = (val, testo) => `<button type="button" class="chip ${s.tipo === val ? 'attivo' : ''} ${val === 'assegnare' ? 'chip-giallo' : ''}" data-tipo="${val}">${testo}</button>`;
 
   main.innerHTML = `
-    <div class="testata"><h1>Movimenti</h1>
-      <select id="mov-mese" aria-label="Mese"><option value="tutti">tutti i mesi</option>${mesi.map(m => `<option value="${m}" ${m === s.mese ? 'selected' : ''}>${nomeMese(m)}</option>`).join('')}</select></div>
+    <div class="testata"><h1>Movimenti</h1></div>
     ${schedeFinanze('movimenti')}
-    <input id="mov-cerca" type="search" placeholder="⌕ cerca (glovo, iren…)" value="${esc(s.testo)}" class="largo-tutto">
-    <div class="chips">${chip('tutte', 'Tutte')}${chip('spese', 'Spese')}${chip('entrate', 'Entrate')}${chip('assegnare', 'Da assegnare ' + daAss)}</div>
-    <div class="chips">
-      <details class="menu-cat"><summary class="chip ${s.cats.length ? 'attivo' : ''}">Categorie${s.cats.length ? ' (' + s.cats.length + ')' : ''} ▾</summary>
-        <div class="menu">${categorie.map(c => `<label><input type="checkbox" data-filtro-cat="${esc(c)}" ${s.cats.indexOf(c) >= 0 ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
-          ${s.cats.length ? '<button type="button" class="piccolo-b" id="cat-tutte">Tutte le categorie</button>' : ''}</div></details>
-      <button type="button" class="chip ${s.ordine === 'data' ? 'attivo' : ''}" data-ordine="data">${s.ordine === 'data' ? (s.giu ? '↓ ' : '↑ ') : ''}data</button>
-      <button type="button" class="chip ${s.ordine === 'importo' ? 'attivo' : ''}" data-ordine="importo">${s.ordine === 'importo' ? (s.giu ? '↓ ' : '↑ ') : ''}importo</button>
+    <div class="comandi-mov">
+      <div class="gruppo-c"><span class="etichetta">Cerca</span><input id="mov-cerca" type="search" placeholder="⌕ glovo, iren…" value="${esc(s.testo)}"></div>
+      <span class="vl"></span>
+      <div class="gruppo-c"><span class="etichetta">Mostra (filtri)</span><div class="fila">
+        <select id="mov-tipo" aria-label="Quali movimenti" class="${s.tipo === 'assegnare' ? 'testo-giallo' : ''}">${[['tutte', 'Tutti i movimenti'], ['spese', 'Solo spese'], ['entrate', 'Solo entrate'], ['assegnare', 'Da assegnare (' + daAss + ')']]
+          .map(o => `<option value="${o[0]}" ${s.tipo === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+        <details class="menu-cat"><summary class="finto-select ${s.cats.length ? 'attivo' : ''}">${s.cats.length === 1 ? esc(s.cats[0]) : s.cats.length ? s.cats.length + ' categorie' : 'Tutte le categorie'} ▾</summary>
+          <div class="menu">${categorie.map(c => `<label><input type="checkbox" data-filtro-cat="${esc(c)}" ${s.cats.indexOf(c) >= 0 ? 'checked' : ''}> ${esc(c)}</label>`).join('')}
+            ${s.cats.length ? '<button type="button" class="piccolo-b" id="cat-tutte">Tutte le categorie</button>' : ''}</div></details>
+        <select id="mov-mese" aria-label="Mese"><option value="tutti">Tutti i mesi</option>${mesi.map(m => `<option value="${m}" ${m === s.mese ? 'selected' : ''}>${nomeMese(m)}</option>`).join('')}</select></div></div>
+      <span class="vl"></span>
+      <div class="gruppo-c"><span class="etichetta">Ordina per</span><div class="segm">
+        <button type="button" class="${s.ordine === 'data' ? 'on' : ''}" data-ordine="data">Data${s.ordine === 'data' ? (s.giu ? ' ↓' : ' ↑') : ''}</button>
+        <button type="button" class="${s.ordine === 'importo' ? 'on' : ''}" data-ordine="importo">Importo${s.ordine === 'importo' ? (s.giu ? ' ↓' : ' ↑') : ''}</button></div></div>
     </div>
     <p class="piccolo">${l.length} movimenti · spese ${euro0.format(spese)} · entrate ${euro0.format(ent)}</p>
     <ul class="elenco carta movimenti">${l.length ? l.slice(0, 400).map(m => {
@@ -606,7 +897,7 @@ function disegnaMovimenti(main) {
     clearTimeout(t);
     t = setTimeout(() => { disegnaMovimenti(main); const c = $('#mov-cerca', main); c.focus(); c.setSelectionRange(c.value.length, c.value.length); }, 250);
   };
-  $$('[data-tipo]', main).forEach(b => { b.onclick = () => { s.tipo = b.dataset.tipo; if (s.tipo === 'assegnare') s.mese = 'tutti'; s.sel = {}; ridisegna(); }; });
+  $('#mov-tipo', main).onchange = e => { s.tipo = e.target.value; if (s.tipo === 'assegnare') s.mese = 'tutti'; s.sel = {}; ridisegna(); };
   $$('[data-ordine]', main).forEach(b => {
     b.onclick = () => { if (s.ordine === b.dataset.ordine) s.giu = !s.giu; else { s.ordine = b.dataset.ordine; s.giu = true; } ridisegna(); };
   });
@@ -671,7 +962,9 @@ function disegnaMovimenti(main) {
 // Schede di Finanze (SPEC v6 §F1) ────────────────────────────
 
 // v11 §4: prima le schede per vedere, poi Regole (per modificare), poi budget e mutuo.
-const SCHEDE_FINANZE = [['finanze', 'Panoramica'], ['movimenti', 'Movimenti'], ['bollette', 'Bollette'], ['regole', 'Regole'], ['budget', 'Budget'], ['mutuo', 'Mutuo']];
+// v15.1: prima le tre schede per analizzare (dal generale al dettaglio), poi le impostazioni (Regole, Budget, Mutuo).
+const SCHEDE_FINANZE = [['finanze', 'Panoramica'], ['bollette', 'Bollette'], ['movimenti', 'Movimenti']];
+const SCHEDE_FINANZE_IMP = [['regole', 'Regole'], ['budget', 'Budget'], ['mutuo', 'Mutuo']];
 
 /** v11 §4: link piccolo in fondo a Movimenti e Bollette verso la scheda Regole (vai = riquadro da mostrare). */
 function linkRegole(vai) {
@@ -691,7 +984,8 @@ function vistaRegole(main, query) {
 }
 
 function schedeFinanze(attiva) {
-  return `<nav class="schede-fin">${SCHEDE_FINANZE.map(s => `<a href="#/${s[0]}" class="${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`).join('')}</nav>`;
+  const a = (s, cl) => `<a href="#/${s[0]}" class="${cl} ${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`;
+  return `<nav class="schede-fin">${SCHEDE_FINANZE.map(s => a(s, '')).join('')}<span class="schede-sep"></span><span class="schede-imp">impostazioni</span>${SCHEDE_FINANZE_IMP.map(s => a(s, 'leggera')).join('')}</nav>`;
 }
 
 // Budget dinamico (SPEC v6 §F2) ────────────────────────────
@@ -860,6 +1154,7 @@ const COLORI_GRUPPI = ['#f2c14e', '#e8825a', '#ef9b6b', '#4f8fe6', '#9b7fe8', '#
  * il dettaglio si filtra su quel gruppo (secondo tocco o ✕ = tutti). Niente KPI in testa al dettaglio. Gli addebiti sono gli
  * stessi movimenti dello script (ids per gruppo, analisiBollette_), così tablet e web app filtrano le stesse righe.
  */
+let bollettePosizione = null;
 function vistaBollette(main, query) {
   const casa = dati.casa || {};
   const gruppi = casa.gruppi || [];
@@ -888,11 +1183,27 @@ function vistaBollette(main, query) {
       <select id="bo-mesi" class="sel-periodo">${[3, 6, 12, 24].map(m => `<option value="${m}" ${m === mesiP ? 'selected' : ''}>${m} mesi</option>`).join('')}</select></div>
     ${schedeFinanze('bollette')}
     <div class="carta">
-      <div class="etichetta">Gruppi · 12 mesi</div>
+      <div class="etichetta">Gruppi · 12 mesi · tocca per il grafico</div>
       <ul class="elenco gruppi">${gruppi.map((x, i) => `<li class="toccabile ${x === g ? 'selezionato' : ''}" data-gruppo="${esc(x.nome)}">
         <span class="quadratino" style="background:${colore(i)}"></span>
         <div class="corpo">${esc(x.nome)}<div class="sotto">${esc(x.frequenza || '')}${x.quota != null ? ' · ' + x.quota + '%' : ''}</div></div>
-        <div class="num">${euro0.format(x.totale)} ${varTxt(x.variazione)}</div></li>`).join('')}</ul>
+        <span class="nascondi-tel">${miniBarre((x.mesi || []).slice(12), colore(i))}</span>
+        <div class="num">${euro0.format(x.totale)} ${varTxt(x.variazione)}<div class="sotto">${euro0.format((x.totale || 0) / 12)}/mese</div></div></li>
+        ${x === g ? `<li class="gruppo-aperto"><div class="due-col"><div>
+          <div class="etichetta">${esc(g.nome)} · mese per mese</div>
+          <p class="piccolo" style="margin:0"><span class="quadratino" style="background:${colore(ig)}"></span> ultimi 12 mesi
+            <span class="quadratino" style="background:#5a6b8c"></span> anno prima</p>
+          ${graficoBollette(g.mesi || [], (casa.mesi || []).slice(12).map(m => daChiave(m + '-01').toLocaleDateString('it-IT', { month: 'narrow' })), colore(ig))}</div>
+          <div>
+          <div class="budget-testa"><span>Ultima bolletta</span><strong class="num ${g.scarto >= 20 ? 'testo-giallo' : ''}">${g.ultima ? euro0.format(g.ultima.importo) + ' · ' + dataBreve(g.ultima.data) : '—'}${g.scarto != null ? ' · ' + (g.scarto > 0 ? '+' : '') + g.scarto + '% vs media' : ''}</strong></div>
+          <div class="budget-testa"><span>Al mese · variazione</span><strong class="num">${euro0.format((g.totale || 0) / 12)} · ${varTxt(g.variazione)} <span class="piccolo">vs anno prima</span></strong></div>
+          <div class="budget-testa"><span>Mese più caro</span><strong class="num">${(() => { const v = (g.mesi || []).slice(12), mx = Math.max(0, ...v), im = v.indexOf(mx), k = (casa.mesi || []).slice(12)[im];
+            return mx > 0 && k ? nomeMese(k.slice(0, 7)) + ' · ' + euro0.format(mx) : '—'; })()}</strong></div>
+          <div class="budget-testa"><span>Frequenza · prossima</span><strong>${esc(g.frequenza || '—')}${g.prossima ? ' · ~' + dataBreve(g.prossima) : ''}</strong></div>
+          ${(() => { const ctr = (casa.controllo || []).filter(c => !c.errore && [g.nome].concat(g.parole || []).some(p => normalizza(p).indexOf(normalizza(c.fornitore)) >= 0));
+            return `<div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
+              : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>`; })()}
+          <p class="piccolo">I suoi addebiti sono nel Dettaglio qui sotto.</p></div></div></li>` : ''}`).join('')}</ul>
     </div>
     <div class="carta" style="margin-top:12px">
       <div class="budget-testa"><div class="etichetta" style="margin:0">Dettaglio</div>
@@ -905,19 +1216,10 @@ function vistaBollette(main, query) {
           <div class="num">${euro.format(Math.abs(n(m['Importo (uscite negative)'])))}</div></li>`).join('')}</ul>`
         : `<p class="piccolo">Nessun addebito${g ? ' ' + esc(g.nome) : ''} negli ultimi ${mesiP} mesi.</p>`}
     </div>
-    ${g ? `<div class="carta" style="margin-top:12px">
-      <div class="etichetta">${esc(g.nome)} · mese per mese</div>
-      <p class="piccolo" style="margin:0"><span class="quadratino" style="background:${colore(ig)}"></span> quest'anno
-        <span class="quadratino" style="background:#5a6b8c"></span> anno prima</p>
-      ${graficoBollette(g.mesi || [], (casa.mesi || []).slice(12).map(m => daChiave(m + '-01').toLocaleDateString('it-IT', { month: 'narrow' })), colore(ig))}
-      <div class="budget-testa"><span>Ultima bolletta</span><strong class="num ${g.scarto >= 20 ? 'testo-giallo' : ''}">${g.ultima ? euro0.format(g.ultima.importo) + ' · ' + dataBreve(g.ultima.data) : '—'}${g.scarto != null ? ' · ' + (g.scarto > 0 ? '+' : '') + g.scarto + '% vs media' : ''}</strong></div>
-      <div class="budget-testa"><span>Frequenza · prossima</span><strong>${esc(g.frequenza || '—')}${g.prossima ? ' · ~' + dataBreve(g.prossima) : ''}</strong></div>
-      ${(() => { const ctr = (casa.controllo || []).filter(c => !c.errore && [g.nome].concat(g.parole || []).some(p => normalizza(p).indexOf(normalizza(c.fornitore)) >= 0));
-        return `<div class="budget-testa"><span>Mail ↔ addebito</span><strong>${ctr.length ? ctr.map(c => c.stato === 'addebitata' ? `<span class="testo-verde">✓ ${esc(c.fornitore)} ${dataBreve(c.addebito.data)}</span>`
-          : `<span class="testo-giallo">${c.stato === 'ritardo' ? '⚠' : '⏳'} ${esc(c.fornitore)} ${c.stato === 'ritardo' ? 'senza addebito' : 'in attesa'}</span>`).join(' · ') : '<span class="piccolo">nessuna mail collegata</span>'}</strong></div>`; })()}
-    </div>` : ''}
     ${linkRegole('bollette')}`;
-  const vai = (gr, m) => { location.hash = '#/bollette?' + new URLSearchParams(Object.assign(gr ? { gruppo: gr } : {}, { mesi: m || mesiP })).toString(); };
+  // v15.1: il gruppo si apre sotto la sua riga; tornando qui la pagina resta dov'era (disegna() riparte dall'alto).
+  if (bollettePosizione != null) { const y = bollettePosizione; bollettePosizione = null; setTimeout(() => window.scrollTo(0, y), 0); }
+  const vai = (gr, m) => { bollettePosizione = window.scrollY; location.hash = '#/bollette?' + new URLSearchParams(Object.assign(gr ? { gruppo: gr } : {}, { mesi: m || mesiP })).toString(); };
   $$('[data-gruppo]', main).forEach(li => { li.onclick = () => vai(li.dataset.gruppo === scelto ? '' : li.dataset.gruppo); });
   // v10 §8: tocco su un movimento del Dettaglio = scorciatoie "Togli da <gruppo>" / "Metti in un gruppo…" (e "Apri il movimento").
   $$('[data-mov]', main).forEach(li => { li.onclick = () => scorciatoiaBolletta(li, li.dataset.mov); });
@@ -3326,7 +3628,7 @@ pianificaSync(0);
 
 /** Voce della barra in basso per una pagina (v7): le sottopagine accendono la loro sezione. */
 function gruppoNav(nome) {
-  if (SCHEDE_FINANZE.some(s => s[0] === nome)) return 'finanze';
+  if (SCHEDE_FINANZE.concat(SCHEDE_FINANZE_IMP).some(s => s[0] === nome)) return 'finanze';
   if (SCHEDE_CIBO.some(s => s[0] === nome) || nome === 'dieta') return 'cibo';
   if (SCHEDE_ALL.some(s => s[0] === nome)) return 'allenamento';
   if (SCHEDE_FUORI.some(s => s[0] === nome) || nome === 'tranquillita') return 'fuori';

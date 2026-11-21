@@ -9,7 +9,8 @@
 // v12.2: l'Indice spento nasconde davvero la colonna dei titoletti (app.css .ed-indice[hidden]); tablet in verticale
 // con i pannelli di Sezioni e Indice sopra la pagina; colonne e indice ridimensionabili con le maniglie.
 // v15: Scadenze senza la scelta Tutte / Casa (si vedono sempre tutte).
-const CACHE = 'assistente-v15';
+// v15.1: Finanze con schede Panoramica · Bollette · Movimenti | impostazioni; Panoramica "Un mese | Un periodo".
+const CACHE = 'assistente-v15.1';
 const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // pagine che hanno risposto "gestisco" (si ricaricano da sole, in modo sicuro)

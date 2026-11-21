@@ -765,3 +765,60 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: v
 .ed-spessori > button span .ed-sp-cerchio { max-width: 28px; max-height: 28px; }
 .ed-spessori > button small { font-size: 11px; color: var(--testo-2); }
 .ed-spessori > button.attivo { background: rgba(138, 180, 248, .18); box-shadow: inset 0 0 0 1.5px var(--accento); }
+
+/* ───────── v15.1 Finanze: schede, Panoramica "Un mese | Un periodo", Bollette con grafico, comandi di Movimenti ───────── */
+.schede-fin { align-items: center; }
+.schede-sep { flex: none; width: 1px; height: 22px; background: var(--bordo); margin: 0 4px 0 8px; }
+.schede-imp { flex: none; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--testo-2); }
+.schede-fin a.leggera { border-style: dashed; font-size: 14px; padding: 5px 12px; }
+.segm { display: inline-flex; border: 1px solid var(--bordo); border-radius: 999px; overflow: hidden; flex: none; }
+.segm button { border: 0; border-radius: 0; background: none; color: var(--testo-2); min-height: 38px; padding: 4px 16px; font-size: 15px; }
+.segm button.on { background: rgba(138, 180, 248, .15); color: var(--accento); font-weight: 600; }
+.pan-sel { border-color: rgba(138, 180, 248, .45); }
+.pan-sel .testata { margin: 0; }
+.pan-sel .mese-sel span { min-width: 150px; }
+.pan-kpi { margin-top: 12px; }
+.riga-avviso { display: block; margin-top: 12px; padding: 12px 16px; }
+.sotto-h2 { margin: -6px 0 10px; }
+.grafico-fin { width: 100%; height: auto; display: block; margin-top: 10px; }
+.avanz { position: relative; height: 10px; border-radius: 5px; background: var(--superficie-2); margin: 10px 0 2px; overflow: hidden; }
+.avanz span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; }
+.pila { display: flex; height: 18px; border-radius: 9px; overflow: hidden; margin: 2px 0 6px; }
+.pila span { display: block; height: 100%; }
+.tab-fin { width: 100%; border-collapse: collapse; }
+.tab-fin td, .tab-fin th { padding: 8px 6px; border-bottom: 1px solid var(--bordo); font-size: 16px; text-align: right; white-space: nowrap; }
+.tab-fin th { font-size: 13px; letter-spacing: .05em; text-transform: uppercase; color: var(--testo-2); font-weight: 500; }
+.tab-fin td:first-child, .tab-fin th:first-child { text-align: left; white-space: normal; }
+.tab-fin tr.riga { cursor: pointer; }
+.tab-fin tr.aperta td, .dett-fin td { background: var(--superficie-2); }
+.tab-fin .pallino, .chips .pallino, .riga2 .pallino, .sotto-h2 .pallino { width: 10px; height: 10px; margin: 0 8px 0 0; vertical-align: middle; }
+.dett-fin td { padding: 12px 14px !important; text-align: left !important; white-space: normal !important; }
+.dett-fin .elenco li, .gruppo-aperto .elenco li { min-height: 0; padding: 7px 0; font-size: 16px; }
+.dett-fin .data-riga { color: var(--testo-2); font-size: 14px; min-width: 52px; }
+.due-col { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; }
+.mini-barre { vertical-align: middle; }
+.fisse-var { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.barra-fv { display: flex; height: 14px; border-radius: 7px; overflow: hidden; margin: 10px 0 6px; }
+.barra-fv span { display: block; height: 100%; }
+.comandi-mov { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.comandi-mov .gruppo-c { display: flex; flex-direction: column; gap: 4px; }
+.comandi-mov .etichetta { font-size: 12px; margin: 0; }
+.comandi-mov .fila { display: flex; gap: 6px; flex-wrap: wrap; }
+.comandi-mov input, .comandi-mov select, .comandi-mov .finto-select { font-size: 15px; min-height: 40px; border-radius: 999px; padding: 6px 12px; }
+.comandi-mov input { width: 200px; }
+.comandi-mov .finto-select { background: var(--superficie-2); border: 1px solid var(--bordo); color: var(--testo); }
+.comandi-mov .finto-select.attivo { border-color: var(--accento); color: var(--accento); }
+.comandi-mov .vl { width: 1px; align-self: stretch; background: var(--bordo); }
+.gruppi li.gruppo-aperto { display: block; background: var(--superficie-2); border-radius: 8px; padding: 10px 12px; margin: 2px 0 6px; }
+@media (max-width: 600px) {
+  .due-col, .fisse-var { grid-template-columns: 1fr; }
+  .nascondi-tel { display: none; }
+  .comandi-mov .vl { display: none; }
+  .comandi-mov input { width: 100%; }
+  .comandi-mov .gruppo-c { width: 100%; }
+  .pan-sel .testata { gap: 8px; }
+  .pan-kpi { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .pan-kpi .carta { padding: 12px; }
+  .pan-kpi .grande { font-size: 22px; }
+  .pan-kpi .riga2 { font-size: 14px; }
+}
