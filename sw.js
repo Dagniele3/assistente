@@ -10,7 +10,8 @@
 // con i pannelli di Sezioni e Indice sopra la pagina; colonne e indice ridimensionabili con le maniglie.
 // v15: Scadenze senza la scelta Tutte / Casa (si vedono sempre tutte).
 // v15.1: Finanze con schede Panoramica · Bollette · Movimenti | impostazioni; Panoramica "Un mese | Un periodo".
-const CACHE = 'assistente-v15.1';
+// v15.2: la sezione Spesa diventa Liste (Spesa in cima, gruppi, liste da comprare e da preparare).
+const CACHE = 'assistente-v15.2';
 const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // pagine che hanno risposto "gestisco" (si ricaricano da sole, in modo sicuro)

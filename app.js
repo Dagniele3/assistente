@@ -154,7 +154,8 @@ async function sincronizza() {
     // v11: pagine degli appunti cambiate qui (un errore non ferma il resto della sincronizzazione)
     if (script11()) { try { await appuntiInvia(); } catch (e) { statoSync.errore = 'Appunti: ' + (e.message || e); } }
     const fresco = await api('dati');
-    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server, versione: fresco.versione, batteria: fresco.batteria };
+    dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server, versione: fresco.versione, batteria: fresco.batteria,
+      piuRichiesti: fresco.piuRichiesti || [] };   // v15.2: "Più richiesti" della Spesa (script 13)
     coda.forEach(applicaLocale); // modifiche fatte durante l'invio
     LS.set('dati', dati);
     statoSync.ultimo = new Date().toISOString();
@@ -392,7 +393,7 @@ function apriRapidoOvunque() {
 
 function vistaHome(main) {
   const f = calcFinanze(), s = calcScadenze(), a = calcAllenamento(), p = calcPeso();
-  const daComprare = righe('Spesa').filter(x => x.Articolo && x.Preso !== true).length;
+  const daComprare = righe('Spesa').filter(x => x.Articolo && x.Preso !== true && inSpesa(x)).length;   // v15.2: solo la Spesa
   const pasti = pastiOggi();
   const pall = st => '<span class="pallino ' + (st === 'neutro' ? '' : st) + '"></span>';
   main.innerHTML = `
@@ -1556,40 +1557,176 @@ function vistaStoricoScadenze(main, query, s, testa, filtro) {
 
 // Spesa ────────────────────────────
 
+// ───────────────────────── Liste (v15.2, SPEC-v15.2, foto 93–95) ─────────────────────────
+// La vecchia Spesa diventa "Liste". Tutte le voci stanno nella scheda Spesa del foglio: colonna "Lista" vuota (o "Spesa") =
+// la Spesa di sempre, che vedono anche il tablet e l'orologio (lo script 13 dà loro solo quelle). Le altre liste sono nel
+// parametro "Liste": "Gruppo: Lista, ☑ Lista | Gruppo2: …" (☑ = da preparare: si riusa, "Ricomincia" toglie le spunte).
+// Spesa sempre in cima e aperta all'avvio; le altre liste si scelgono nella colonna a sinistra (sopra, sul telefono).
+
+const LISTA_SPESA = 'Spesa';
+const statoListe = { aperta: LISTA_SPESA, nuova: false, modifica: false };
+
+function inSpesa(x) { const l = normalizza(x && x.Lista); return !l || l === 'spesa'; }
+
+/** Liste dal parametro "Liste" → [{ nome, gruppo, prepara }]. */
+function elencoListe() {
+  const out = [];
+  String(par('Liste') || '').split('|').forEach(pezzo => {
+    const i = pezzo.indexOf(':');
+    if (i < 0) return;
+    const gruppo = pezzo.slice(0, i).trim();
+    pezzo.slice(i + 1).split(',').forEach(x => {
+      let nome = x.trim();
+      const prepara = nome.indexOf('☑') === 0;
+      if (prepara) nome = nome.slice(1).trim();
+      if (nome && gruppo && normalizza(nome) !== 'spesa') out.push({ nome, gruppo, prepara });
+    });
+  });
+  return out;
+}
+
+function testoListe(liste) {
+  const gruppi = [];
+  liste.forEach(l => { if (gruppi.indexOf(l.gruppo) < 0) gruppi.push(l.gruppo); });
+  return gruppi.map(g => g + ': ' + liste.filter(l => l.gruppo === g).map(l => (l.prepara ? '☑ ' : '') + l.nome).join(', ')).join(' | ');
+}
+
+function vociLista(nome) {
+  return righe('Spesa').filter(x => x.Articolo && (nome === LISTA_SPESA ? inSpesa(x) : normalizza(x.Lista) === normalizza(nome)));
+}
+
+/** Nomi di liste e gruppi: niente | : , ☑ (separano il parametro) e niente formule. */
+function nomeValido(s) { return s && !/[|:,☑]/.test(s) && !/^[=+\-@]/.test(s) && normalizza(s) !== 'spesa'; }
+
 function vistaSpesa(main) {
-  const voci = righe('Spesa').filter(x => x.Articolo);
-  const daPrendere = voci.filter(x => x.Preso !== true), presi = voci.filter(x => x.Preso === true);
-  const riga = x => `<li class="${x.Preso === true ? 'fatto' : ''}">
-    <input type="checkbox" data-spunta="${esc(x.ID)}" ${x.Preso === true ? 'checked' : ''} aria-label="Preso">
-    <div class="corpo"><div>${esc(x.Articolo)}</div>${x['Quantità'] ? `<div class="sotto">${esc(x['Quantità'])}</div>` : ''}</div>
-    <button class="piccolo-b" data-elimina="${esc(x.ID)}" title="Togli">✕</button></li>`;
+  const st = statoListe, liste = elencoListe();
+  if (st.aperta !== LISTA_SPESA && !liste.some(l => l.nome === st.aperta)) st.aperta = LISTA_SPESA;
+  const lista = st.aperta === LISTA_SPESA ? { nome: LISTA_SPESA, gruppo: '', prepara: false } : liste.find(l => l.nome === st.aperta);
+  const gruppi = [];
+  liste.forEach(l => { if (gruppi.indexOf(l.gruppo) < 0) gruppi.push(l.gruppo); });
+  const daFare = l => vociLista(l.nome).filter(x => x.Preso !== true).length;
 
-  main.innerHTML = `
-    <h1>Spesa</h1>
-    <form class="modulo carta" id="f-spesa">
-      <label class="campo largo">Articolo<input name="articolo" required autocomplete="off"></label>
-      <label class="campo">Quantità<input name="quantita" style="width:110px"></label>
-      <button class="primario" type="submit">Aggiungi</button>
-    </form>
-    <h2>Da comprare (${daPrendere.length})</h2>
-    <ul class="elenco carta">${daPrendere.length ? daPrendere.map(riga).join('') : '<li class="vuoto">Lista vuota.</li>'}</ul>
-    ${presi.length ? `<h2>Nel carrello (${presi.length})</h2><ul class="elenco carta">${presi.map(riga).join('')}</ul>
-      <div class="azioni"><button id="svuota">Togli i presi dalla lista</button></div>` : ''}
-    ${bottonePenna('Spesa')}`;
+  // colonna delle liste: Spesa in cima, poi i gruppi
+  const nS = daFare({ nome: LISTA_SPESA });
+  let col = `<button type="button" class="liste-spesa ${st.aperta === LISTA_SPESA && !st.nuova ? 'on' : ''}" data-lista="${LISTA_SPESA}">
+      <span class="ico">🛒</span><span><strong>Spesa</strong><div class="piccolo">la lista di sempre</div></span>${nS ? `<span class="conta">${nS}</span>` : ''}</button>`;
+  gruppi.forEach(g => {
+    col += `<div class="liste-gruppo"><div class="etichetta">${esc(g)}</div>${liste.filter(l => l.gruppo === g).map(l => {
+      const v = vociLista(l.nome), n = v.filter(x => x.Preso !== true).length;
+      return `<button type="button" class="liste-voce ${st.aperta === l.nome && !st.nuova ? 'on' : ''}" data-lista="${esc(l.nome)}">${l.prepara ? '☑' : '•'} ${esc(l.nome)}
+        <span class="n">${l.prepara ? (v.length - n) + '/' + v.length : n || ''}</span></button>`;
+    }).join('')}</div>`;
+  });
+  col += `<button type="button" class="liste-nuova" id="lista-nuova">＋ Nuova lista</button>`;
 
-  $('#f-spesa').onsubmit = e => {
+  // a destra: nuova lista, modifica o la lista aperta
+  let dx;
+  if (st.nuova || st.modifica) {
+    const m = st.modifica ? lista : { nome: '', gruppo: gruppi[0] || '', prepara: false };
+    dx = `<form class="carta" id="f-lista"><h2 class="liste-titolo">${st.modifica ? 'Modifica lista' : 'Nuova lista'}</h2>
+      <div class="liste-modulo">
+        <label class="campo">Nome<input name="nome" required maxlength="40" value="${esc(m.nome)}" autocomplete="off"></label>
+        <label class="campo">Gruppo<input name="gruppo" required maxlength="30" list="liste-gruppi" value="${esc(m.gruppo)}" placeholder="es. Casa" autocomplete="off">
+          <datalist id="liste-gruppi">${gruppi.map(g => `<option value="${esc(g)}">`).join('')}</datalist></label>
+        <div class="liste-tipi">
+          <label class="${m.prepara ? '' : 'on'}"><input type="radio" name="tipo" value="compra" ${m.prepara ? '' : 'checked'}><strong>• Da comprare / da fare</strong>
+            <span class="piccolo">spunti una voce e va in "presi"; poi "Togli i presi"</span></label>
+          <label class="${m.prepara ? 'on' : ''}"><input type="radio" name="tipo" value="prepara" ${m.prepara ? 'checked' : ''}><strong>☑ Da preparare</strong>
+            <span class="piccolo">si riusa: spunti mentre prepari, "Ricomincia" toglie le spunte e la lista resta</span></label>
+        </div></div>
+      <p class="piccolo">Nel nome e nel gruppo non si usano | : , ☑</p>
+      <div class="azioni"><button class="primario" type="submit">${st.modifica ? 'Salva' : 'Crea'}</button><button type="button" id="lista-annulla">Annulla</button>
+        ${st.modifica ? '<button type="button" id="lista-elimina" class="testo-rosso">Elimina la lista</button>' : ''}</div></form>`;
+  } else {
+    const voci = vociLista(lista.nome), da = voci.filter(x => x.Preso !== true), presi = voci.filter(x => x.Preso === true);
+    const riga = x => `<li class="${x.Preso === true ? 'fatto' : ''}">
+      <input type="checkbox" data-spunta="${esc(x.ID)}" ${x.Preso === true ? 'checked' : ''} aria-label="${lista.prepara ? 'Pronto' : 'Preso'}">
+      <div class="corpo"><div>${esc(x.Articolo)}</div>${x['Quantità'] ? `<div class="sotto">${esc(x['Quantità'])}</div>` : ''}</div>
+      <button class="piccolo-b" data-elimina="${esc(x.ID)}" title="Togli">✕</button></li>`;
+    const inLista = {};
+    da.forEach(x => { inLista[normalizza(x.Articolo)] = 1; });
+    const rapidi = lista.nome === LISTA_SPESA ? (dati.piuRichiesti || []).filter(r => !inLista[normalizza(r.articolo)]).slice(0, 8) : [];
+    dx = `<div class="carta"><div class="testata"><div><h2 class="liste-titolo">${lista.nome === LISTA_SPESA ? '🛒 ' : ''}${esc(lista.nome)}</h2>
+        <div class="piccolo">${lista.gruppo ? esc(lista.gruppo) + ' · ' : ''}${lista.prepara ? '☑ da preparare (si riusa)' : '• da comprare'}</div></div>
+        ${lista.nome === LISTA_SPESA ? '' : '<button type="button" class="piccolo-b" id="lista-modifica">✎ Modifica</button>'}</div>
+      ${lista.prepara && voci.length ? `<div class="avanz"><span style="width:${presi.length / voci.length * 100}%;background:var(--verde)"></span></div><div class="piccolo">${presi.length} su ${voci.length} pronti</div>` : ''}
+      <form class="liste-aggiungi" id="f-voce">
+        <input name="articolo" required autocomplete="off" placeholder="Aggiungi a ${esc(lista.nome)}…" aria-label="Voce">
+        <input name="quantita" class="q" placeholder="Quantità" aria-label="Quantità o nota">
+        <button class="primario" type="submit">Aggiungi</button></form>
+      ${rapidi.length ? `<div class="piccolo">Più richiesti · tocca per rimetterli in lista</div><div class="chips liste-rapidi">${rapidi.map(r => `<button type="button" class="chip chip-piccolo" data-rapido="${esc(r.articolo)}">＋ ${esc(r.articolo)}</button>`).join('')}</div>` : ''}
+      ${lista.prepara
+        ? `<ul class="elenco">${voci.length ? voci.map(riga).join('') : '<li class="vuoto">Lista vuota: aggiungi le cose da preparare.</li>'}</ul>
+           ${presi.length ? '<div class="azioni"><button type="button" id="lista-ricomincia">↺ Ricomincia (toglie le spunte, la lista resta)</button></div>' : ''}`
+        : `<h3 class="liste-sez">Da comprare (${da.length})</h3><ul class="elenco">${da.length ? da.map(riga).join('') : '<li class="vuoto">Lista vuota.</li>'}</ul>
+           ${presi.length ? `<h3 class="liste-sez">Nel carrello (${presi.length})</h3><ul class="elenco">${presi.map(riga).join('')}</ul>
+             <div class="azioni"><button type="button" id="svuota">Togli i presi dalla lista</button></div>` : ''}`}
+      ${lista.nome === LISTA_SPESA ? '<p class="piccolo">È la stessa spesa del tablet (CORPO) e dell\'orologio.</p>' : ''}</div>`;
+  }
+
+  main.innerHTML = `<h1>Liste</h1><div class="liste-griglia"><div class="liste-colonna">${col}</div><div>${dx}</div></div>${bottonePenna('Spesa')}`;
+  collegaListe(main, lista, liste);
+}
+
+function collegaListe(main, lista, liste) {
+  const st = statoListe, ridisegna = () => { const y = window.scrollY; vistaSpesa(main); window.scrollTo(0, y); };
+  $$('[data-lista]', main).forEach(b => { b.onclick = () => { st.aperta = b.dataset.lista; st.nuova = st.modifica = false; ridisegna(); }; });
+  $('#lista-nuova', main).onclick = () => { st.nuova = true; st.modifica = false; ridisegna(); };
+  const fl = $('#f-lista', main);
+  if (fl) {
+    $$('.liste-tipi input', main).forEach(r => { r.onchange = () => $$('.liste-tipi label', main).forEach(x => x.classList.toggle('on', x.querySelector('input').checked)); });
+    $('#lista-annulla', main).onclick = () => { st.nuova = st.modifica = false; ridisegna(); };
+    fl.onsubmit = e => {
+      e.preventDefault();
+      const fd = new FormData(fl), nome = String(fd.get('nome')).trim(), gruppo = String(fd.get('gruppo')).trim(), prepara = fd.get('tipo') === 'prepara';
+      if (!nomeValido(nome) || !nomeValido(gruppo)) { toast('Nome o gruppo non valido (niente | : , ☑, e non "Spesa")'); return; }
+      const vecchio = st.modifica ? lista.nome : null;
+      if (liste.some(l => normalizza(l.nome) === normalizza(nome) && l.nome !== vecchio)) { toast('C\'è già una lista con questo nome'); return; }
+      const nuove = liste.filter(l => l.nome !== vecchio).concat([{ nome, gruppo, prepara }]);
+      // l'ordine resta: la lista modificata torna al suo posto
+      if (vecchio) { const i = liste.findIndex(l => l.nome === vecchio); nuove.splice(i, 0, nuove.pop()); }
+      if (vecchio && vecchio !== nome) vociLista(vecchio).forEach(x => salva('Spesa', { 'Lista': nome }, x.ID));
+      salvaParametri({ 'Liste': testoListe(nuove) }, vecchio ? 'Lista salvata' : 'Lista creata');
+      st.aperta = nome; st.nuova = st.modifica = false;
+      vistaSpesa(main);
+    };
+    const el = $('#lista-elimina', main);
+    if (el) el.onclick = () => {
+      const voci = vociLista(lista.nome);
+      if (!confirm(`Eliminare la lista "${lista.nome}"${voci.length ? ' e le sue ' + voci.length + ' voci' : ''}?`)) return;
+      voci.forEach(x => elimina('Spesa', x.ID));
+      salvaParametri({ 'Liste': testoListe(liste.filter(l => l.nome !== lista.nome)) }, 'Lista eliminata');
+      st.aperta = LISTA_SPESA; st.modifica = false;
+      vistaSpesa(main);
+    };
+    return;
+  }
+  const mod = $('#lista-modifica', main);
+  if (mod) mod.onclick = () => { st.modifica = true; ridisegna(); };
+  $('#f-voce', main).onsubmit = e => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    salva('Spesa', { 'Articolo': fd.get('articolo'), 'Quantità': fd.get('quantita'), 'Preso': false, 'Aggiunto il': oggiK() });
-    disegna();
-    $('#f-spesa [name=articolo]').focus();
+    const v = { 'Articolo': String(fd.get('articolo')).trim(), 'Quantità': fd.get('quantita'), 'Preso': false, 'Aggiunto il': oggiK() };
+    if (lista.nome !== LISTA_SPESA) v['Lista'] = lista.nome;   // la Spesa resta con la colonna vuota, come prima
+    salva('Spesa', v);
+    ridisegna();
+    $('#f-voce [name=articolo]', main).focus();
   };
-  $$('[data-spunta]', main).forEach(c => {
-    c.onchange = () => { salva('Spesa', { 'Preso': c.checked }, c.dataset.spunta); disegna(); };
+  $$('[data-rapido]', main).forEach(b => {
+    b.onclick = () => {
+      const nome = b.dataset.rapido, c = vociLista(LISTA_SPESA).find(x => normalizza(x.Articolo) === normalizza(nome));
+      if (c) salva('Spesa', { 'Preso': false, 'Aggiunto il': oggiK() }, c.ID);
+      else salva('Spesa', { 'Articolo': nome, 'Preso': false, 'Aggiunto il': oggiK() });
+      toast(nome + ' in lista');
+      ridisegna();
+    };
   });
-  collegaElimina(main, 'Spesa', false);
-  const sv = $('#svuota');
-  if (sv) sv.onclick = () => { presi.forEach(x => elimina('Spesa', x.ID)); disegna(); };
+  $$('[data-spunta]', main).forEach(c => { c.onchange = () => { salva('Spesa', { 'Preso': c.checked }, c.dataset.spunta); ridisegna(); }; });
+  $$('[data-elimina]', main).forEach(b => { b.onclick = () => { elimina('Spesa', b.dataset.elimina); ridisegna(); }; });
+  const sv = $('#svuota', main);
+  if (sv) sv.onclick = () => { vociLista(lista.nome).filter(x => x.Preso === true).forEach(x => elimina('Spesa', x.ID)); ridisegna(); };
+  const ric = $('#lista-ricomincia', main);
+  if (ric) ric.onclick = () => { vociLista(lista.nome).filter(x => x.Preso === true).forEach(x => salva('Spesa', { 'Preso': false }, x.ID)); ridisegna(); };
 }
 
 // Allenamento ────────────────────────────

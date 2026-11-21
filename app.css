@@ -822,3 +822,34 @@ body.ap-tutto.ap-cassetto .ap-guscio > .ap-elenco { left: var(--ap-ws); width: v
   .pan-kpi .grande { font-size: 22px; }
   .pan-kpi .riga2 { font-size: 14px; }
 }
+
+/* ───────── v15.2 Liste (ex Spesa): Spesa in cima, gruppi di liste, liste da comprare e da preparare ───────── */
+.liste-griglia { display: grid; grid-template-columns: 270px 1fr; gap: 16px; align-items: start; }
+.liste-spesa { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; min-height: 64px; padding: 10px 14px; border-radius: 14px;
+  background: rgba(129, 201, 149, .08); border: 1.5px solid rgba(129, 201, 149, .55); }
+.liste-spesa.on { background: rgba(129, 201, 149, .18); border-color: var(--verde); }
+.liste-spesa .ico { font-size: 26px; }
+.liste-spesa .conta { margin-left: auto; background: var(--verde); color: #10261a; font-weight: 700; border-radius: 999px; padding: 1px 10px; font-size: 15px; }
+.liste-gruppo { margin-top: 16px; }
+.liste-gruppo .etichetta { margin: 0 6px 4px; }
+.liste-voce { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; min-height: 40px; padding: 6px 10px; border: 0; border-radius: 10px;
+  background: none; font-size: 16px; }
+.liste-voce:hover { background: var(--superficie-2); }
+.liste-voce.on { background: rgba(138, 180, 248, .12); color: var(--accento); }
+.liste-voce .n { margin-left: auto; color: var(--testo-2); font-size: 14px; }
+.liste-nuova { width: 100%; margin-top: 16px; border-style: dashed; color: var(--accento); background: none; font-size: 15px; }
+.liste-titolo { margin: 0; font-size: 22px; color: var(--testo); }
+.liste-sez { font-size: 15px; font-weight: 500; color: var(--testo-2); margin: 14px 0 4px; }
+.liste-aggiungi { display: flex; gap: 8px; margin: 12px 0 8px; }
+.liste-aggiungi input { flex: 1; min-width: 0; }
+.liste-aggiungi input.q { flex: none; width: 120px; }
+.liste-rapidi { margin: 4px 0 8px; }
+.liste-modulo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 10px; }
+.liste-tipi { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.liste-tipi label { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--bordo); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.liste-tipi label.on { border-color: var(--accento); background: rgba(138, 180, 248, .08); }
+.liste-tipi input { display: none; }
+@media (max-width: 700px) {
+  .liste-griglia, .liste-modulo, .liste-tipi { grid-template-columns: 1fr; }
+  .liste-aggiungi input.q { width: 90px; }
+}
