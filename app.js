@@ -1764,9 +1764,14 @@ function videoMob(x) {
 }
 /** v16.4: passo con l'etichetta in grassetto ("Parti:", "Muovi:", "Senti:", "Evita:"). */
 function passoHtml(t) { const m = String(t).match(/^([A-Za-zÀ-ú]{3,10}):\s*(.*)$/); return m ? `<b>${esc(m[1])}</b> ${esc(m[2])}` : esc(t); }
+/** v16.4: nome del disegnino (web/disegni-mob.js, tablet res/drawable): "mob_" + nome senza accenti, "_" al posto del resto. */
+function disegnoMob(x) {
+  const k = 'mob_' + String((x && x.Esercizio) || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return (window.DISEGNI_MOB || {})[k] || '';
+}
 function comeSiFaHtml(x) {
-  const pp = passiMob(x), v = videoMob(x);
-  return (pp.length ? `<ol class="mob-passi">${pp.map(t => `<li>${passoHtml(t)}</li>`).join('')}</ol>` : '<p class="piccolo">Nessun passo scritto: aggiungili con ✎ (un passo per riga).</p>') +
+  const pp = passiMob(x), v = videoMob(x), d = disegnoMob(x);
+  return (d ? `<div class="mob-disegno">${d}</div>` : '') + (pp.length ? `<ol class="mob-passi">${pp.map(t => `<li>${passoHtml(t)}</li>`).join('')}</ol>` : '<p class="piccolo">Nessun passo scritto: aggiungili con ✎ (un passo per riga).</p>') +
     (v ? `<a class="bottone mob-video" href="${esc(v)}" target="_blank" rel="noopener">▶ Guarda il video</a>` : '');
 }
 

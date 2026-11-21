@@ -13,7 +13,7 @@
 // v15.2: la sezione Spesa diventa Liste (Spesa in cima, gruppi, liste da comprare e da preparare).
 // v16: Allenamento › Mobilità (routine guidate, riscaldamento) e ripetizioni a intervallo / per lato nella Scheda.
 const CACHE = 'assistente-v16.4';
-const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './disegni-mob.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // pagine che hanno risposto "gestisco" (si ricaricano da sole, in modo sicuro)
 const gestite = new Set();

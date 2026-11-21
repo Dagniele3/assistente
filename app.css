@@ -896,6 +896,7 @@ body.guidata-aperta { overflow: hidden; }
 .g-come .mob-passi li { margin: 0 0 10px; }
 .g-pronto { font-size: 20px; color: var(--giallo); }
 .g-via { background: var(--verde) !important; color: #06210f !important; border-color: var(--verde) !important; font-size: 30px !important; min-width: 280px; }
+.mob-disegno svg { display: block; width: 100%; max-width: 440px; height: auto; margin: 4px 0 6px; }
 .mob-passi { margin: 6px 0 8px; padding-left: 22px; }
 .elenco .mob-passi li, .mob-passi li { display: list-item; min-height: 0; padding: 3px 0; border: 0; gap: 0; }
 .mob-come[open] { margin-top: 2px; }
