@@ -758,9 +758,69 @@ function disegnaFinanze(main) {
       <div class="carta">${graficoMesi(940, 230, pm, '', c, c ? info(c).budget : budget, c ? info(c).col : '')}</div>`;
   }
 
+  h += sezioneMutuo();   // v18.1
   h += `${sezioneDaAssegnare()}${bottonePenna('Movimenti')}`;
   main.innerHTML = h;
   collegaFinanze(main);
+}
+
+/**
+ * v18.1: piano del mutuo calcolato dai parametri (rata, prima rata, rate totali, capitale, tasso annuo). Le rate fino a oggi
+ * contano come pagate (anche se i movimenti di questo mese non sono ancora importati). null se mancano i dati.
+ */
+function pianoMutuo(oggi) {
+  const C = n(par('Mutuo capitale iniziale (€)')), N = Math.round(n(par('Mutuo rate totali'))), t = n(par('Mutuo tasso annuo (%)'));
+  const primaK = valoreCampo(par('Mutuo prima rata'), 'date');
+  if (!C || !N || !t || !primaK) return null;
+  const i = (t < 0.2 ? t : t / 100) / 12;
+  const R = n(par('Mutuo rata (€)')) || C * i / (1 - Math.pow(1 + i, -N));
+  const p = daChiave(primaK);
+  const dataRata = k => { const d = new Date(p.getFullYear(), p.getMonth() + k, 1); d.setDate(Math.min(p.getDate(), new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate())); return d; };
+  const residuo = k => Math.max(0, C * Math.pow(1 + i, k) - R * (Math.pow(1 + i, k) - 1) / i);
+  const o = oggi || new Date(); o.setHours(0, 0, 0, 0);
+  let k = 0;
+  while (k < N && dataRata(k) <= o) k++;
+  const annoK = o.getFullYear();
+  let capAnno = 0, intAnno = 0, rateAnno = 0;
+  for (let j = 0; j < N; j++) {
+    const d = dataRata(j);
+    if (d.getFullYear() !== annoK) { if (d.getFullYear() > annoK) break; continue; }
+    const quotaInt = residuo(j) * i;
+    intAnno += quotaInt; capAnno += R - quotaInt; rateAnno++;
+  }
+  return { C, N, R, i, tasso: t < 0.2 ? t * 100 : t, pagate: k, residuo: residuo(k), dataRata, residuoDi: residuo,
+    capitalePagato: C - residuo(k), interessiPagati: R * k - (C - residuo(k)), interessiTotali: R * N - C,
+    fine: dataRata(N - 1), prossima: k < N ? dataRata(k) : null, anno: { anno: annoK, rate: rateAnno, capitale: capAnno, interessi: intAnno } };
+}
+
+/** v18.1: sezione Mutuo in fondo alla Panoramica: 4 numeri, debito residuo nel tempo con "oggi", quote di quest'anno. */
+function sezioneMutuo() {
+  const m = pianoMutuo();
+  if (!m) return '';
+  const mese = d => d.toLocaleDateString('it-IT', { month: 'short', year: 'numeric' });
+  const W = 940, H = 190, sx = 46, dx = 14, top = 14, bas = 26;
+  const X = k => sx + (W - sx - dx) * k / m.N, Y = v => top + (H - top - bas) * (1 - v / m.C);
+  const punti = []; for (let k = 0; k <= m.N; k += 3) punti.push(X(k).toFixed(1) + ',' + Y(m.residuoDi(k)).toFixed(1));
+  const fatti = punti.filter((_, j) => j * 3 <= m.pagate);
+  const xo = X(m.pagate), yo = Y(m.residuo);
+  const anni = []; const a0 = m.dataRata(0).getFullYear(), a1 = m.fine.getFullYear();
+  for (let a = Math.ceil(a0 / 5) * 5; a <= a1; a += 5) { const k = (a - a0) * 12 - m.dataRata(0).getMonth(); if (k > 0 && k < m.N) anni.push([X(k), a]); }
+  const assi = [0, 0.5, 1].map(f => `<line x1="${sx}" x2="${W - dx}" y1="${Y(m.C * f)}" y2="${Y(m.C * f)}" stroke="rgba(154,160,166,.18)"/><text x="${sx - 6}" y="${Y(m.C * f) + 4}" text-anchor="end" font-size="11" fill="#9aa0a6">${Math.round(m.C * f / 1000)}k</text>`).join('');
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="grafico" role="img" aria-label="Debito residuo del mutuo nel tempo">${assi}
+    <polygon points="${X(0)},${Y(0)} ${fatti.join(' ')} ${xo},${yo} ${xo},${Y(0)}" fill="rgba(129,201,149,.18)"/>
+    <polyline points="${punti.join(' ')}" fill="none" stroke="#8ab4f8" stroke-width="2"/>
+    <line x1="${xo}" x2="${xo}" y1="${top}" y2="${Y(0)}" stroke="#fdd663" stroke-dasharray="4 3"/><circle cx="${xo}" cy="${yo}" r="4.5" fill="#fdd663"/>
+    <text x="${xo + 8}" y="${top + 10}" font-size="12" fill="#fdd663">oggi · ${euro0.format(m.residuo)}</text>
+    ${anni.map(a => `<text x="${a[0]}" y="${H - 8}" text-anchor="middle" font-size="11" fill="#9aa0a6">${a[1]}</text>`).join('')}</svg>`;
+  const q = m.pagate / m.N;
+  return `<h2>Mutuo</h2><p class="piccolo sotto-h2">tasso fisso ${String(Math.round(m.tasso * 100) / 100).replace('.', ',')}% · rata ${euro.format(m.R)} · rate contate come pagate fino a oggi</p>
+    <div class="carta"><div class="griglia-4 mutuo-kpi">
+      <div><div class="piccolo">debito residuo</div><div class="grande num">${euro0.format(m.residuo)}</div><div class="piccolo">capitale restituito ${euro0.format(m.capitalePagato)}</div></div>
+      <div><div class="piccolo">rate pagate</div><div class="grande num">${m.pagate}/${m.N}</div><div class="piccolo">${pct.format(q)} · mancano ${m.N - m.pagate}</div></div>
+      <div><div class="piccolo">interessi pagati</div><div class="grande num">${euro0.format(m.interessiPagati)}</div><div class="piccolo">su ${euro0.format(m.interessiTotali)} totali</div></div>
+      <div><div class="piccolo">fine</div><div class="grande num">${esc(mese(m.fine))}</div><div class="piccolo">${m.prossima ? 'prossima rata ' + esc(dataBreve(chiave(m.prossima))) : 'finito'}</div></div></div>
+      ${svg}
+      <p class="piccolo">Nel ${m.anno.anno}: ${m.anno.rate} rate, <strong>${euro0.format(m.anno.capitale)}</strong> di capitale e <strong>${euro0.format(m.anno.interessi)}</strong> di interessi. Dati del mutuo: scheda Parametri del foglio.</p></div>`;
 }
 
 function dettaglioCatMeseFin(mov, c, tot, mc, bud, col, mese, prec) {
@@ -1291,15 +1351,8 @@ function valoreCampo(v, tipo) {
 }
 
 function vistaMutuo(main) {
-  const mu = dati.casa && dati.casa.mutuo;
-  const quota = mu && mu.totali ? mu.pagate / mu.totali : null;
-  let fine = '';
-  const prima = valoreCampo(par('Mutuo prima rata'), 'date');
-  if (prima && mu && mu.totali) {
-    const d = daChiave(prima);
-    fine = new Date(d.getFullYear(), d.getMonth() + mu.totali - 1, 1).toLocaleDateString('it-IT', { month: 'short', year: 'numeric' });
-  }
-  // v18 (W4): "Dati" = Carica movimenti (export Intesa trascinato o scelto) + specifiche del mutuo come prima
+  // v18 (W4): "Dati" = Carica movimenti (export Intesa trascinato o scelto). v18.1: tolte le specifiche del mutuo
+  // (inserite una volta nel foglio); il mutuo si vede in Panoramica.
   const imp = dati.importMovimenti || null;
   main.innerHTML = `
     <div class="testata"><h1>Dati</h1><span class="piccolo">import automatico ogni giorno alle 7</span></div>
@@ -1313,40 +1366,7 @@ function vistaMutuo(main) {
       <div id="carica-esito"></div>
       ${imp && imp.quando ? `<p class="piccolo" style="margin:10px 0 0">Ultimo import: ${esc(dataOraBreve(imp.quando))}${imp.automatico ? ' (automatico)' : ''}${imp.ultimoMovimento ? ' · ultimo movimento ' + esc(giornoMese(imp.ultimoMovimento)) : ''}</p>` : ''}
     </div>
-    <div class="sezione-v18" style="margin-top:28px"><h2>Mutuo</h2><p>si salva nel foglio</p></div>
-    <div class="carta">
-      <div class="etichetta">Situazione</div>
-      ${mu ? `<div class="griglia-3">
-        <div><div class="piccolo">rata</div><div class="grande num">${euro0.format(mu.rata)}</div></div>
-        <div><div class="piccolo">pagate</div><div class="grande num">${mu.pagate}${mu.totali ? '/' + mu.totali : ''}</div></div>
-        <div><div class="piccolo">residuo</div><div class="grande num">${mu.residuo != null ? '~' + euro0.format(mu.residuo) : '—'}</div></div></div>
-        ${quota != null ? `<div class="barra-mutuo"><span style="width:${Math.round(quota * 100)}%"></span></div>
-        <p class="piccolo">${pct.format(quota)} pagato${fine ? ' · fine prevista ' + fine : ''}${mu.prossima ? ' · prossima rata ' + dataBreve(mu.prossima) : ''}</p>` : ''}
-        ${mu.residuo == null ? '<p class="piccolo">Residuo stimato non disponibile: servono capitale iniziale e tasso annuo.</p>' : ''}`
-        : '<p class="piccolo">Compila rata (o capitale + tasso + rate totali) e prima rata qui sotto.</p>'}
-    </div>
-    <div class="carta" style="margin-top:12px">
-      <div class="etichetta">Parametri (modificabili)</div>
-      ${PARAMETRI_MUTUO.map(p => `<label class="campo-riga">${p[1]}<input type="${p[2] === 'date' ? 'date' : 'text'}" ${p[2] === 'number' ? 'inputmode="decimal"' : ''}
-        data-par="${esc(p[0])}" value="${esc(valoreCampo(par(p[0]), p[2]))}" placeholder="—"></label>`).join('')}
-      <p class="piccolo">Vuoti capitale o tasso = residuo stimato non disponibile. Tasso: es. 2,5 per 2,5%.</p>
-    </div>`;
-  $$('[data-par]', main).forEach(inp => {
-    inp.onchange = async () => {
-      const nome = inp.dataset.par, v = inp.value;
-      dati.parametri = Object.assign({}, dati.parametri, { [nome]: v });
-      LS.set('dati', dati);
-      try {
-        const r = await api('parametri', { valori: { [nome]: v } });
-        if (r.mutuo !== undefined) { dati.casa = Object.assign({}, dati.casa, { mutuo: r.mutuo }); LS.set('dati', dati); }
-        toast('Salvato: ' + nome);
-        if (tablet) tablet.aggiornaWidget();
-        vistaMutuo(main);
-      } catch (e) {
-        toast('Non salvato (serve la rete): ' + (e.message || e));
-      }
-    };
-  });
+    <p class="piccolo" style="margin-top:14px">Il mutuo è in fondo alla <a href="#/finanze">Panoramica</a> (v18.1: i suoi dati stanno nella scheda Parametri del foglio).</p>`;
   caricaMovimenti(main);
 }
 

@@ -963,3 +963,7 @@ body.guidata-aperta { overflow: hidden; }
 }
 /* v18 (W3): telefono a scala 0,88 (come "Liste rimpicciolita"), tranne Appunti e Cibo: classe messa da scalaTelefono() */
 html.tel-scala { zoom: .88; }
+/* v18.1: Mutuo in Panoramica */
+.mutuo-kpi { margin-bottom: 10px; }
+.mutuo-kpi .piccolo { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .mutuo-kpi { grid-template-columns: 1fr 1fr; gap: 12px 8px; } }
