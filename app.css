@@ -967,3 +967,9 @@ html.tel-scala { zoom: .88; }
 .mutuo-kpi { margin-bottom: 10px; }
 .mutuo-kpi .piccolo { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .mutuo-kpi { grid-template-columns: 1fr 1fr; gap: 12px 8px; } }
+.mutuo-sim { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bordo); }
+.mutuo-sim-riga { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 6px 0; }
+.mutuo-sim-riga input { width: 130px; }
+.mutuo-sim-scelte { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+.mutuo-sim-scelte > div { border: 1px solid var(--bordo); border-radius: 12px; padding: 10px 12px; }
+@media (max-width: 600px) { .mutuo-sim-scelte { grid-template-columns: 1fr; } }

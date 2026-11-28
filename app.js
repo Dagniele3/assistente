@@ -762,6 +762,61 @@ function disegnaFinanze(main) {
   h += `${sezioneDaAssegnare()}${bottonePenna('Movimenti')}`;
   main.innerHTML = h;
   collegaFinanze(main);
+  collegaMutuo(main);   // v18.1
+}
+
+/**
+ * v18.1: simulatore dell'estinzione parziale. La cifra (ricordata nel dispositivo, niente nel foglio) si toglie dal debito di
+ * oggi; due strade come in banca: (A) stessa durata, rata più bassa; (B) stessa rata, finisce prima. Interessi risparmiati =
+ * differenza tra gli interessi che restano da pagare. Sul grafico le due linee tratteggiate dal punto "oggi".
+ */
+function collegaMutuo(main) {
+  const inp = $('#mutuo-extra', main), box = $('#mutuo-sim-esito', main), g = $('#mutuo-sim', main);
+  const m = pianoMutuo();
+  if (!inp || !box || !m) return;
+  const W = 940, H = 190, sx = 46, dx = 14, top = 14, bas = 26;
+  const X = k => sx + (W - sx - dx) * k / m.N, Y = v => top + (H - top - bas) * (1 - v / m.C);
+  const mese = d => d.toLocaleDateString('it-IT', { month: 'short', year: 'numeric' });
+  const calcola = () => {
+    const x = n(inp.value);
+    LS.set('mutuoExtra', inp.value.trim());
+    if (!(x > 0)) { g.innerHTML = ''; box.innerHTML = '<p class="piccolo">Scrivi una cifra: vedi come cambiano rata, durata e interessi.</p>'; return; }
+    const i = m.i, B = m.residuo, resta = m.N - m.pagate, B2 = Math.max(0, B - x);
+    const intOra = m.R * resta - B;                                   // interessi che restano senza versamento
+    if (B2 <= 0) {
+      g.innerHTML = '';
+      box.innerHTML = `<p><strong>Con ${euro0.format(x)} il mutuo è chiuso</strong> (debito di oggi ${euro0.format(B)}): risparmi <strong class="testo-verde">${euro0.format(intOra)}</strong> di interessi.</p>`;
+      return;
+    }
+    const RA = B2 * i / (1 - Math.pow(1 + i, -resta));               // A: stessa durata
+    const intA = RA * resta - B2;
+    const mesiB = Math.ceil(-Math.log(1 - B2 * i / m.R) / Math.log(1 + i));   // B: stessa rata
+    const ultimaB = B2 * Math.pow(1 + i, mesiB - 1) - m.R * (Math.pow(1 + i, mesiB - 1) - 1) / i;
+    const intB = m.R * (mesiB - 1) + ultimaB * (1 + i) - B2;
+    const fineB = m.dataRata(m.pagate + mesiB - 1);
+    const anniMesi = k => { const a = Math.floor(k / 12), r = k % 12; return (a ? a + (a === 1 ? ' anno' : ' anni') : '') + (a && r ? ' e ' : '') + (r ? r + (r === 1 ? ' mese' : ' mesi') : ''); };
+    const linea = (rata, mesi, col) => {
+      const p = [];
+      for (let k = 0; k <= mesi; k += 3) { const b = Math.max(0, B2 * Math.pow(1 + i, k) - rata * (Math.pow(1 + i, k) - 1) / i); p.push(X(m.pagate + k).toFixed(1) + ',' + Y(b).toFixed(1)); }
+      p.push(X(m.pagate + mesi).toFixed(1) + ',' + Y(0).toFixed(1));
+      return `<polyline points="${X(m.pagate).toFixed(1)},${Y(B).toFixed(1)} ${p.join(' ')}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="6 4"/>`;
+    };
+    g.innerHTML = linea(RA, resta, '#81c995') + linea(m.R, mesiB, '#f6ae2d');
+    box.innerHTML = `<p class="piccolo" style="margin:6px 0">Debito da ${euro0.format(B)} a <strong>${euro0.format(B2)}</strong>. Interessi che restano oggi: ${euro0.format(intOra)}.</p>
+      <div class="mutuo-sim-scelte">
+        <div class="mutuo-sim-a"><div class="etichetta"><span class="pallino" style="background:#81c995"></span>A · stessa durata, rata più bassa</div>
+          <div class="grande num">${euro.format(RA)}<span class="piccolo"> /mese</span></div>
+          <div class="piccolo">−${euro.format(m.R - RA)} al mese · fine sempre ${esc(mese(m.fine))}</div>
+          <div>interessi risparmiati <strong class="testo-verde">${euro0.format(intOra - intA)}</strong></div></div>
+        <div class="mutuo-sim-b"><div class="etichetta"><span class="pallino" style="background:#f6ae2d"></span>B · stessa rata, finisci prima</div>
+          <div class="grande num">${esc(mese(fineB))}</div>
+          <div class="piccolo">${anniMesi(resta - mesiB)} prima · rata sempre ${euro.format(m.R)}</div>
+          <div>interessi risparmiati <strong class="testo-verde">${euro0.format(intOra - intB)}</strong></div></div></div>
+      <p class="piccolo">Stima con tasso fisso ${String(Math.round(m.tasso * 100) / 100).replace('.', ',')}% e versamento oggi; la banca può applicare spese o arrotondare le date. Tratteggi sul grafico: verde A, arancio B.</p>`;
+  };
+  inp.oninput = calcola;
+  $$('[data-mutuo-extra]', main).forEach(b => { b.onclick = () => { inp.value = b.dataset.mutuoExtra; calcola(); }; });
+  calcola();
 }
 
 /**
@@ -808,7 +863,7 @@ function sezioneMutuo() {
   const assi = [0, 0.5, 1].map(f => `<line x1="${sx}" x2="${W - dx}" y1="${Y(m.C * f)}" y2="${Y(m.C * f)}" stroke="rgba(154,160,166,.18)"/><text x="${sx - 6}" y="${Y(m.C * f) + 4}" text-anchor="end" font-size="11" fill="#9aa0a6">${Math.round(m.C * f / 1000)}k</text>`).join('');
   const svg = `<svg viewBox="0 0 ${W} ${H}" class="grafico" role="img" aria-label="Debito residuo del mutuo nel tempo">${assi}
     <polygon points="${X(0)},${Y(0)} ${fatti.join(' ')} ${xo},${yo} ${xo},${Y(0)}" fill="rgba(129,201,149,.18)"/>
-    <polyline points="${punti.join(' ')}" fill="none" stroke="#8ab4f8" stroke-width="2"/>
+    <polyline points="${punti.join(' ')}" fill="none" stroke="#8ab4f8" stroke-width="2"/><g id="mutuo-sim"></g>
     <line x1="${xo}" x2="${xo}" y1="${top}" y2="${Y(0)}" stroke="#fdd663" stroke-dasharray="4 3"/><circle cx="${xo}" cy="${yo}" r="4.5" fill="#fdd663"/>
     <text x="${xo + 8}" y="${top + 10}" font-size="12" fill="#fdd663">oggi · ${euro0.format(m.residuo)}</text>
     ${anni.map(a => `<text x="${a[0]}" y="${H - 8}" text-anchor="middle" font-size="11" fill="#9aa0a6">${a[1]}</text>`).join('')}</svg>`;
@@ -820,7 +875,11 @@ function sezioneMutuo() {
       <div><div class="piccolo">interessi pagati</div><div class="grande num">${euro0.format(m.interessiPagati)}</div><div class="piccolo">su ${euro0.format(m.interessiTotali)} totali</div></div>
       <div><div class="piccolo">fine</div><div class="grande num">${esc(mese(m.fine))}</div><div class="piccolo">${m.prossima ? 'prossima rata ' + esc(dataBreve(chiave(m.prossima))) : 'finito'}</div></div></div>
       ${svg}
-      <p class="piccolo">Nel ${m.anno.anno}: ${m.anno.rate} rate, <strong>${euro0.format(m.anno.capitale)}</strong> di capitale e <strong>${euro0.format(m.anno.interessi)}</strong> di interessi. Dati del mutuo: scheda Parametri del foglio.</p></div>`;
+      <p class="piccolo">Nel ${m.anno.anno}: ${m.anno.rate} rate, <strong>${euro0.format(m.anno.capitale)}</strong> di capitale e <strong>${euro0.format(m.anno.interessi)}</strong> di interessi. Dati del mutuo: scheda Parametri del foglio.</p>
+      <div class="mutuo-sim"><div class="etichetta">E se verso una cifra in più? (estinzione parziale oggi)</div>
+        <div class="mutuo-sim-riga"><label>Versamento <input id="mutuo-extra" type="text" inputmode="decimal" placeholder="es. 10000" value="${esc(LS.get('mutuoExtra', ''))}"> €</label>
+          <span class="chips">${[5000, 10000, 20000].map(v => `<button type="button" class="chip" data-mutuo-extra="${v}">${euro0.format(v)}</button>`).join('')}</span></div>
+        <div id="mutuo-sim-esito"><p class="piccolo">Scrivi una cifra: vedi come cambiano rata, durata e interessi.</p></div></div></div>`;
 }
 
 function dettaglioCatMeseFin(mov, c, tot, mc, bud, col, mese, prec) {
