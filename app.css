@@ -961,3 +961,5 @@ body.guidata-aperta { overflow: hidden; }
   .liste-griglia { grid-template-columns: minmax(0, 1fr); }
   .liste-griglia > * { min-width: 0; }
 }
+/* v18 (W3): telefono a scala 0,88 (come "Liste rimpicciolita"), tranne Appunti e Cibo: classe messa da scalaTelefono() */
+html.tel-scala { zoom: .88; }

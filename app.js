@@ -375,17 +375,15 @@ function percorso() {
 }
 
 /**
- * v18 (W3): sul telefono tutta la web app alla scala di "Liste rimpicciolita" (≈ 0,88: 412 px di schermo = 468 px di
+ * v18 (W3): sul telefono tutta la web app alla scala di "Liste rimpicciolita" (zoom 0,88: 412 px di schermo = 468 px di
  * pagina), da subito e senza pizzicare; Appunti e Cibo restano a scala 1 come prima. Solo telefono (lato corto < 600 px).
  */
-const SCALA_TEL = 0.88;
 function scalaTelefono(nome) {
-  const m = document.querySelector('meta[name=viewport]');
-  if (!m || tablet || Math.min(screen.width, screen.height) >= 600) return;
-  const g = gruppoNav(nome), s = g === 'appunti' || g === 'cibo' ? 1 : SCALA_TEL;
-  const c = s === 1 ? 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content'
-    : `width=${Math.round(screen.width / s)}, initial-scale=${s}, minimum-scale=${s}, viewport-fit=cover, interactive-widget=resizes-content`;
-  if (m.content !== c) m.content = c;
+  // Zoom CSS sulla pagina (classe tel-scala su <html>): Chrome del telefono non riapplica initial-scale del viewport
+  // cambiato dopo il caricamento (provato su Samsung A54: pagina larga 426 px a scala 1, usciva a destra).
+  if (tablet || Math.min(screen.width, screen.height) >= 600) { document.documentElement.classList.remove('tel-scala'); return; }
+  const g = gruppoNav(nome);
+  document.documentElement.classList.toggle('tel-scala', g !== 'appunti' && g !== 'cibo');
 }
 
 function disegna() {
