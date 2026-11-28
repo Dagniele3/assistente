@@ -62,6 +62,15 @@ function dataBreve(k) {
   const d = daChiave(k);
   return d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
 }
+/** v18: "27/11" da "2026-11-27". */
+function giornoMese(k) { const p = String(k || '').slice(0, 10).split('-'); return p.length === 3 ? p[2] + '/' + p[1] : ''; }
+/** v18: "oggi alle 7:00" / "ieri alle 7:00" / "25/11 alle 7:00" da un istante ISO. */
+function dataOraBreve(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const k = chiave(d), ora = d.getHours() + ':' + pad(d.getMinutes());
+  return (k === oggiK() ? 'oggi' : k === spostaGiorni(oggiK(), -1) ? 'ieri' : giornoMese(k)) + ' alle ' + ora;
+}
 function oraAdesso() { const d = new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
 function n(v) { const x = Number(String(v == null ? '' : v).replace(',', '.')); return isNaN(x) ? 0 : x; }
 function normalizza(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
@@ -155,7 +164,8 @@ async function sincronizza() {
     if (script11()) { try { await appuntiInvia(); } catch (e) { statoSync.errore = 'Appunti: ' + (e.message || e); } }
     const fresco = await api('dati');
     dati = { schede: fresco.schede, categorie: fresco.categorie, parametri: fresco.parametri, casa: fresco.casa, fisico: fresco.fisico, server: fresco.server, versione: fresco.versione, batteria: fresco.batteria,
-      piuRichiesti: fresco.piuRichiesti || [] };   // v15.2: "Più richiesti" della Spesa (script 13)
+      piuRichiesti: fresco.piuRichiesti || [],   // v15.2: "Più richiesti" della Spesa (script 13)
+      importMovimenti: fresco.importMovimenti || null };   // v18 (W4): ultimo import per Finanze › Dati
     coda.forEach(applicaLocale); // modifiche fatte durante l'invio
     LS.set('dati', dati);
     statoSync.ultimo = new Date().toISOString();
@@ -364,8 +374,23 @@ function percorso() {
   return { nome: parti[0], query: new URLSearchParams(parti[1] || '') };
 }
 
+/**
+ * v18 (W3): sul telefono tutta la web app alla scala di "Liste rimpicciolita" (≈ 0,88: 412 px di schermo = 468 px di
+ * pagina), da subito e senza pizzicare; Appunti e Cibo restano a scala 1 come prima. Solo telefono (lato corto < 600 px).
+ */
+const SCALA_TEL = 0.88;
+function scalaTelefono(nome) {
+  const m = document.querySelector('meta[name=viewport]');
+  if (!m || tablet || Math.min(screen.width, screen.height) >= 600) return;
+  const g = gruppoNav(nome), s = g === 'appunti' || g === 'cibo' ? 1 : SCALA_TEL;
+  const c = s === 1 ? 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content'
+    : `width=${Math.round(screen.width / s)}, initial-scale=${s}, minimum-scale=${s}, viewport-fit=cover, interactive-widget=resizes-content`;
+  if (m.content !== c) m.content = c;
+}
+
 function disegna() {
   const p = percorso();
+  scalaTelefono(p.nome);   // v18 (W3)
   // v11: il vecchio Quaderno è diventato l'appunto rapido (pop-up sopra la pagina, finisce in Appunti → Da sistemare)
   if (p.nome === 'quaderno') { history.replaceState(null, '', '#/'); apriRapidoOvunque(); disegna(); return; }
   chiudiQuadernoSeAperto();
@@ -965,7 +990,8 @@ function disegnaMovimenti(main) {
 // v11 §4: prima le schede per vedere, poi Regole (per modificare), poi budget e mutuo.
 // v15.1: prima le tre schede per analizzare (dal generale al dettaglio), poi le impostazioni (Regole, Budget, Mutuo).
 const SCHEDE_FINANZE = [['finanze', 'Panoramica'], ['bollette', 'Bollette'], ['movimenti', 'Movimenti']];
-const SCHEDE_FINANZE_IMP = [['regole', 'Regole'], ['budget', 'Budget'], ['mutuo', 'Mutuo']];
+// v18 (W1): "Mutuo" diventa "Dati" (carica movimenti + specifiche del mutuo); l'indirizzo #/mutuo resta.
+const SCHEDE_FINANZE_IMP = [['regole', 'Regole'], ['budget', 'Budget'], ['mutuo', 'Dati']];
 
 /** v11 §4: link piccolo in fondo a Movimenti e Bollette verso la scheda Regole (vai = riquadro da mostrare). */
 function linkRegole(vai) {
@@ -976,8 +1002,10 @@ function linkRegole(vai) {
 function vistaRegole(main, query) {
   main.innerHTML = `<div class="testata"><h1>Regole</h1></div>
     ${schedeFinanze('regole')}
-    <div id="regole-box"></div>
-    <div id="gb-box"></div>`;
+    <div class="sezione-v18"><h2>Regole delle categorie</h2><p>A quale categoria va ogni movimento.</p></div>
+    <div id="regole-box" class="sez-reg"></div>
+    <div class="sezione-v18 bollette"><h2>Gruppi bollette</h2><p>Quali movimenti sono bollette e in che gruppo.</p></div>
+    <div id="gb-box" class="sez-reg"></div>`;   // v18 (W1): due sezioni ben separate (titolo, fascia di colore, spazio)
   const vai = query && query.get('vai');
   const scorri = id => { const el = document.getElementById(id); if (el) el.scrollIntoView(); };
   disegnaRegoleCategorie($('#regole-box', main)).then(() => { if (vai === 'categorie') scorri('regole-categorie'); });
@@ -986,7 +1014,10 @@ function vistaRegole(main, query) {
 
 function schedeFinanze(attiva) {
   const a = (s, cl) => `<a href="#/${s[0]}" class="${cl} ${s[0] === attiva ? 'attiva' : ''}">${s[1]}</a>`;
-  return `<nav class="schede-fin">${SCHEDE_FINANZE.map(s => a(s, '')).join('')}<span class="schede-sep"></span><span class="schede-imp">impostazioni</span>${SCHEDE_FINANZE_IMP.map(s => a(s, 'leggera')).join('')}</nav>`;
+  // v18 (W1): niente scritta "impostazioni": l'icona ⚙ separa le schede per analizzare da quelle per regolare (solo bordo).
+  // Due gruppi: sul telefono vanno su due righe intere (prima alcune restavano fuori dallo schermo).
+  return `<nav class="schede-fin"><span class="gr">${SCHEDE_FINANZE.map(s => a(s, '')).join('')}</span>`
+    + `<span class="gr"><span class="schede-ingr" title="Regolazioni" aria-label="Regolazioni">⚙</span>${SCHEDE_FINANZE_IMP.map(s => a(s, 'reg')).join('')}</span></nav>`;
 }
 
 // Budget dinamico (SPEC v6 §F2) ────────────────────────────
@@ -1270,9 +1301,21 @@ function vistaMutuo(main) {
     const d = daChiave(prima);
     fine = new Date(d.getFullYear(), d.getMonth() + mu.totali - 1, 1).toLocaleDateString('it-IT', { month: 'short', year: 'numeric' });
   }
+  // v18 (W4): "Dati" = Carica movimenti (export Intesa trascinato o scelto) + specifiche del mutuo come prima
+  const imp = dati.importMovimenti || null;
   main.innerHTML = `
-    <div class="testata"><h1>Mutuo</h1><span class="piccolo">si salva nel foglio</span></div>
+    <div class="testata"><h1>Dati</h1><span class="piccolo">import automatico ogni giorno alle 7</span></div>
     ${schedeFinanze('mutuo')}
+    <div class="carta"><div class="etichetta">Carica movimenti</div>
+      <div class="carica" id="carica"><div class="ico">⇪</div>
+        <div class="tit solo-grande">Trascina qui l'export Intesa</div><div class="tit solo-tel">Carica l'export Intesa</div>
+        <div class="sotto">.xlsx o .csv · si importa subito, i doppioni si saltano</div>
+        <button type="button" class="primario" id="carica-scegli">Scegli il file…</button>
+        <input type="file" id="carica-file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden></div>
+      <div id="carica-esito"></div>
+      ${imp && imp.quando ? `<p class="piccolo" style="margin:10px 0 0">Ultimo import: ${esc(dataOraBreve(imp.quando))}${imp.automatico ? ' (automatico)' : ''}${imp.ultimoMovimento ? ' · ultimo movimento ' + esc(giornoMese(imp.ultimoMovimento)) : ''}</p>` : ''}
+    </div>
+    <div class="sezione-v18" style="margin-top:28px"><h2>Mutuo</h2><p>si salva nel foglio</p></div>
     <div class="carta">
       <div class="etichetta">Situazione</div>
       ${mu ? `<div class="griglia-3">
@@ -1306,6 +1349,58 @@ function vistaMutuo(main) {
       }
     };
   });
+  caricaMovimenti(main);
+}
+
+/**
+ * v18 (W4): l'export Intesa (.xlsx o .csv) trascinato sul riquadro o scelto va allo script (azione caricaMovimenti):
+ * lo salva nella cartella "Movimenti banca" e lo importa subito con lo stesso import delle 7 (i doppioni si saltano).
+ * Formato sbagliato = messaggio chiaro e niente importato (controllo qui sul nome e poi nello script sulle colonne).
+ */
+let esitoCarica = null;   // v18: ultimo esito, resta 10 minuti (la vista si ridisegna dopo la sincronizzazione)
+function caricaMovimenti(main) {
+  const zona = $('#carica', main), file = $('#carica-file', main);
+  if (!zona) return;
+  const mostra = (cl, html) => {
+    esitoCarica = { cl, html, alle: Date.now() };
+    const el = $('#carica-esito');
+    if (el) el.innerHTML = `<div class="esito ${cl}">${html}</div>`;
+  };
+  if (esitoCarica && Date.now() - esitoCarica.alle < 10 * 60000) $('#carica-esito', main).innerHTML = `<div class="esito ${esitoCarica.cl}">${esitoCarica.html}</div>`;
+  const errore = (nome, perche) => mostra('errore', `<div class="riga1">✕ «${esc(nome)}» ${esc(perche)}: niente importato</div>
+    <p class="piccolo" style="margin:6px 0 0">Serve il file dei movimenti scaricato dall'app o dal sito Intesa (Excel .xlsx o .csv) con le colonne Data, Operazione, Dettagli, Importo.</p>`);
+  const invia = f => {
+    if (!f) return;
+    if (!/\.(xlsx|csv)$/i.test(f.name)) { errore(f.name, 'non è un export Intesa'); return; }
+    if (f.size > 8 * 1024 * 1024) { errore(f.name, 'è troppo grande per un export dei movimenti'); return; }
+    mostra('lavoro', `<div class="riga1">Carico «${esc(f.name)}»…</div><p class="piccolo" style="margin:4px 0 0">salvo in Movimenti banca e importo (qualche secondo)</p>`);
+    const rd = new FileReader();
+    rd.onerror = () => errore(f.name, 'non si riesce a leggere');
+    rd.onload = async () => {
+      try {
+        const r = await api('caricaMovimenti', { nome: f.name, dati: String(rd.result).split(',')[1] || '' });
+        const e = r.esito || {};
+        const per = e.periodoDa && e.periodoA ? `<span>periodo <b>${esc(giornoMese(e.periodoDa))}–${esc(giornoMese(e.periodoA))}</b></span>` : '';
+        mostra('', `<div class="riga1">✓ Importato «${esc(f.name)}» · salvato in Movimenti banca</div>
+          <div class="numeri"><span><b>${e.lette || 0}</b> righe lette</span><span><b>${e.nuove || 0}</b> nuove</span><span><b>${e.presenti || 0}</b> già presenti</span>${per}
+          ${e.daCategorizzare ? `<span class="testo-giallo"><b>${e.daCategorizzare}</b> da categorizzare</span>` : ''}</div>
+          <div class="azioni">${e.daCategorizzare ? `<a class="bottone piccolo-b" href="#/finanze?vista=assegna">Categorizza ${e.daCategorizzare === 1 ? "l'unico" : 'i ' + e.daCategorizzare} ›</a>` : ''}
+          ${e.nuove ? '<a class="bottone piccolo-b" href="#/movimenti">Vedi i movimenti nuovi</a>' : ''}</div>`);
+        sincronizza().catch(() => {});   // movimenti nuovi anche nella cache dell'app
+        if (tablet) tablet.aggiornaWidget();
+      } catch (err) {
+        const m = String(err.message || err);
+        if (/formato|colonn|export/i.test(m)) errore(f.name, m.replace(/^.*?:\s*/, ''));
+        else mostra('errore', `<div class="riga1">✕ Non caricato: ${esc(m)}</div><p class="piccolo" style="margin:6px 0 0">Serve la rete (e lo script v18). Riprova; l'import automatico delle 7 resta.</p>`);
+      }
+    };
+    rd.readAsDataURL(f);
+  };
+  $('#carica-scegli', main).onclick = () => file.click();
+  file.onchange = () => { invia(file.files[0]); file.value = ''; };
+  zona.ondragover = ev => { ev.preventDefault(); zona.classList.add('sopra'); };
+  zona.ondragleave = () => zona.classList.remove('sopra');
+  zona.ondrop = ev => { ev.preventDefault(); zona.classList.remove('sopra'); invia(ev.dataTransfer.files[0]); };
 }
 
 // Da assegnare (movimenti importati dalla banca senza categoria sicura) ────────────────────────────
@@ -2947,6 +3042,7 @@ if (/AssistenteTablet/.test(navigator.userAgent)) document.body.classList.add('i
 $('#stato').onclick = () => sincronizza();
 apContaSporche().then(aggiornaStato);   // v11: pagine degli appunti ancora da inviare
 window.addEventListener('hashchange', disegna);
+window.addEventListener('orientationchange', () => setTimeout(() => scalaTelefono(percorso().nome), 300));   // v18 (W3)
 window.addEventListener('online', () => pianificaSync(0));
 window.addEventListener('offline', () => { statoSync.stato = 'offline'; aggiornaStato(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pianificaSync(0); });
@@ -2996,12 +3092,33 @@ function metri(a, b) {
 }
 function puntoDa(s) { const p = String(s || '').split(',').map(Number); return p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1]) && p[0] ? [p[0], p[1]] : null; }
 
-/** Località preferite di FUORI: "nome|lat|lon|quota|S:2,SO:1; …". */
+/**
+ * Località preferite di FUORI. v18 (T1): una riga per preferito nella scheda "Preferiti" (ID, Modificato il, Tolto), la
+ * stessa del tablet; con lo script vecchio (scheda assente) il parametro "Località preferite" ("nome|lat|lon|quota|S:2,SO:1; …").
+ */
 function preferitiFuori() {
+  const r = righe('Preferiti');
+  if (dati.schede && dati.schede.Preferiti) {
+    return r.filter(x => x.Tolto !== true && String(x.Tolto).toUpperCase() !== 'TRUE' && x.Nome && n(x.Lat))
+      .sort((a, b) => n(a.Ordine) - n(b.Ordine))
+      .map(x => ({ id: x.ID, nome: String(x.Nome).trim(), lat: n(x.Lat), lon: n(x.Lon), quota: n(x.Quota), orient: String(x.Orientamenti || '').trim() }));
+  }
   return String(par('Località preferite') || '').split(';').map(x => x.trim()).filter(Boolean).map(x => {
     const f = x.split('|');
     return { nome: f[0].trim(), lat: n(f[1]), lon: n(f[2]), quota: n(f[3]), orient: (f[4] || '').trim() };
   }).filter(p => p.lat);
+}
+
+/** v18 (T1): nome personale di un preferito (vale anche sul tablet; la riga con ID si sincronizza da sola). */
+function rinominaPreferito(p, dopo) {
+  if (!p.id) { toast('Serve lo script v18 per cambiare il nome dalla web app'); return; }
+  const nome = prompt('Nome del preferito (anche sul tablet)', p.nome);
+  if (nome == null) return;
+  const v = nome.replace(/[|;\r\n]/g, ' ').trim().slice(0, 60);
+  if (!v || v === p.nome) return;
+  salva('Preferiti', { Nome: v }, p.id);
+  toast('Nome salvato: ' + v);
+  if (dopo) dopo();
 }
 
 const ROSA8 = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
@@ -3562,7 +3679,7 @@ async function vistaSiVola(main) {
   if (!el) return;
   const perche = {};
   el.innerHTML = voli.map((vo, i) => `<div class="carta sivola" style="margin-top:10px">
-      <div class="etichetta">${esc(vo.p.nome)}${vo.orient ? ' · ' + esc(vo.orient) : ''}</div>
+      <div class="etichetta">${esc(vo.p.nome)}${vo.orient ? ' · ' + esc(vo.orient) : ''}${vo.p.id ? ` <button type="button" class="piccolo-b rinomina-pref" data-rinomina="${i}" title="Cambia il nome (anche sul tablet)">✎</button>` : ''}</div>
       ${vo.errore ? `<p class="piccolo">${esc(vo.errore)}</p>` : vo.giorni.map(gg => {
         const vv = votoVolo(gg.x, gg.col, gg.calmo, gg.sv), vt = votoTranquillita(gg.x, gg.col, gg.sv, tp);
         const k = i + '-' + gg.g;
@@ -3573,6 +3690,7 @@ async function vistaSiVola(main) {
             : `<span class="pillole-voto"><button type="button" class="pillola-voto ${coloreVoto(vv.voto)}" data-perche="${k}v">Volo ${vv.voto}</button><button type="button" class="pillola-voto ${coloreVoto(vt.voto)}" data-perche="${k}t">Tranq. ${vt.voto}</button></span>`}</div>
           <div class="perche-box" data-box="${k}" hidden></div>`;
       }).join('')}</div>`).join('');
+  $$('[data-rinomina]', el).forEach(b => { b.onclick = () => rinominaPreferito(voli[Number(b.dataset.rinomina)].p, () => vistaSiVola(main)); });   // v18
   $$('[data-perche]', el).forEach(b => {
     b.onclick = () => {
       const k = b.dataset.perche, box = $('[data-box="' + k.slice(0, -1) + '"]', el);

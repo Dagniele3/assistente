@@ -12,7 +12,8 @@
 // v15.1: Finanze con schede Panoramica · Bollette · Movimenti | impostazioni; Panoramica "Un mese | Un periodo".
 // v15.2: la sezione Spesa diventa Liste (Spesa in cima, gruppi, liste da comprare e da preparare).
 // v16: Allenamento › Mobilità (routine guidate, riscaldamento) e ripetizioni a intervallo / per lato nella Scheda.
-const CACHE = 'assistente-v17';
+// v18: Finanze con ⚙ e "Dati" (carica movimenti), Appunti con le colonne sempre aperte, telefono a scala 0,88, preferiti a righe.
+const CACHE = 'assistente-v18';
 const FILE = ['./', './index.html', './app.css', './appunti.js', './app.js', './disegni-mob.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // pagine che hanno risposto "gestisco" (si ricaricano da sole, in modo sicuro)

@@ -915,3 +915,49 @@ body.guidata-aperta { overflow: hidden; }
 .g-fine { margin: auto; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; }
 .g-titolo { font-size: clamp(36px, 7vw, 60px); font-weight: 700; color: var(--verde); }
 .g-fine p { font-size: 22px; color: var(--testo-2); max-width: 640px; }
+
+/* ───────── v18 (W1, W3, W4) Finanze: ⚙ separatore, regolazioni solo bordo, Regole in due sezioni, Dati con "Carica movimenti" ───────── */
+.schede-fin { flex-wrap: wrap; align-items: center; overflow: visible; }
+.schede-fin .gr { display: flex; gap: 6px; align-items: center; flex: none; }
+.schede-ingr { flex: none; font-size: 18px; color: var(--testo-2); margin: 0 4px 0 12px; opacity: .8; }
+.schede-fin a.reg { border-radius: 8px; background: none; border: 1.5px solid rgba(154, 160, 166, .45); padding: 5px 12px; font-size: 14px; }
+.schede-fin a.reg.attiva { border-color: var(--accento); color: var(--accento); background: none; }
+.sezione-v18 { margin: 22px 0 10px; padding: 10px 14px; border-left: 6px solid var(--accento); background: rgba(138, 180, 248, .08); border-radius: 0 10px 10px 0; }
+.sezione-v18.bollette { border-left-color: #f2c14e; background: rgba(242, 193, 78, .08); margin-top: 40px; }
+.sezione-v18 h2 { margin: 0; font-size: 22px; color: var(--testo); }
+.sezione-v18 p { margin: 4px 0 0; font-size: 15px; color: var(--testo-2); }
+.carica { border: 2px dashed rgba(138, 180, 248, .55); border-radius: 14px; padding: 22px; text-align: center; background: rgba(138, 180, 248, .05); transition: background .15s; }
+.carica.sopra { background: rgba(138, 180, 248, .18); border-color: var(--accento); }
+.carica .ico { font-size: 34px; }
+.carica .tit { font-size: 19px; margin: 6px 0 4px; }
+.carica .sotto { font-size: 15px; color: var(--testo-2); }
+.carica button { margin-top: 12px; }
+.esito { margin-top: 14px; border-radius: 12px; padding: 12px 14px; border: 1px solid var(--verde); background: rgba(129, 201, 149, .10); font-size: 16px; }
+.esito.errore { border-color: var(--rosso); background: rgba(242, 139, 130, .10); }
+.esito.lavoro { border-color: var(--bordo); background: none; }
+.esito .riga1 { font-weight: 600; overflow-wrap: anywhere; }
+.esito .numeri { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; }
+.esito .numeri span b { font-size: 20px; }
+.esito .azioni { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.carica .solo-tel { display: none; }
+@media (max-width: 600px) {
+  .schede-fin { gap: 6px; overflow: visible; }
+  .schede-fin .gr { width: 100%; gap: 4px; }
+  .schede-fin .gr a { flex: 1 1 0; text-align: center; padding: 6px 4px; font-size: 15px; }
+  .schede-fin .gr a.reg { font-size: 14px; }
+  .schede-ingr { margin: 0 2px 0 0; }
+  .carica .solo-grande { display: none; }
+  .carica .solo-tel { display: block; }
+  /* W3: Allenamento › Scheda attiva (e gli altri campi a riga): il campo si stringe invece di uscire dallo schermo */
+  .campo-riga { flex-wrap: wrap; min-width: 0; }
+  .campo-riga > input, .campo-riga > select { min-width: 0; max-width: 100%; flex: 0 1 auto; }
+}
+.sez-reg > .carta:first-child { margin-top: 0 !important; }
+.sez-reg > .carta:first-child > .etichetta:first-child { display: none; }   /* il titolo è nella fascia sopra */
+/* v18 (W2): la riga piccola della scheda di un appunto non esce più: si accorcia con "…" */
+.ap-lista .sotto { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* v18 (W3): Liste sul telefono non più larga dello schermo (apriva ingrandita): la colonna si stringe, niente di più largo */
+@media (max-width: 700px) {
+  .liste-griglia { grid-template-columns: minmax(0, 1fr); }
+  .liste-griglia > * { min-width: 0; }
+}

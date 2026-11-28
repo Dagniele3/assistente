@@ -298,7 +298,8 @@ function vistaAppunti(main, query) {
       <div class="ap-man" data-m="s" title="Trascina per allargare o stringere · doppio tocco = larghezza iniziale"><span class="ap-man-fumo"></span></div>
       <div class="ap-man" data-m="e" title="Trascina per allargare o stringere · doppio tocco = larghezza iniziale"><span class="ap-man-fumo"></span></div></div>`;
     guscio = $('.ap-guscio', main);
-    if (LS.get('apLarga', false)) guscio.classList.add('ap-larga');
+    // v18 (W2): ogni volta che si apre Appunti le colonne (sezioni ed elenco) sono aperte; chiuderle vale finché si resta qui
+    AP.larga = false;
     // v12.2: maniglie tra le colonne e velo del pannello (finestra stretta: tocco fuori dal pannello = chiude)
     $$('.ap-man', guscio).forEach(m => apManiglia(m, m.dataset.m));
     $('.ap-velo-pann', guscio).addEventListener('pointerdown', ev => { ev.preventDefault(); apPannello(false); });
@@ -489,7 +490,12 @@ function apScriviConta() {
   if (!el || !AP.ed || !AP.ed.conta) return;
   const c = AP.ed.conta();
   if (!c) return;
-  el.textContent = ' · ' + c.schermi + (c.schermi === 1 ? ' schermo' : ' schermi') + (c.titoletti ? ' · ' + c.titoletti + (c.titoletti === 1 ? ' titoletto' : ' titoletti') : '');
+  // v18 (W2): "· N schermi · N titoletti" usciva dalla scheda: ora solo nel suggerimento del ✎ (e della riga piccola)
+  const t = c.schermi + (c.schermi === 1 ? ' schermo' : ' schermi') + (c.titoletti ? ' · ' + c.titoletti + (c.titoletti === 1 ? ' titoletto' : ' titoletti') : '');
+  el.textContent = '';
+  const li = el.closest('li'), ma = li && $('.ap-tit-ma', li), sotto = el.parentElement;
+  if (ma) ma.title = 'Cambia il titolo · ' + t;
+  if (sotto) sotto.title = t;
 }
 /** Scheda dell'appunto aperto: bordo, ✎ e conteggio solo lì (senza ridisegnare l'elenco). */
 function apSegnaAperto() {
@@ -945,7 +951,7 @@ function apMontaEditor(box, id, rec) {
   $('#ap-v-sez', box).onclick = () => {
     const g = $('.ap-guscio');
     if (apStretto()) { apPannello(!g.classList.contains('ap-pannello-su')); return; }
-    g.classList.toggle('ap-larga'); LS.set('apLarga', g.classList.contains('ap-larga')); apColonne(); apStatoVista();
+    g.classList.toggle('ap-larga'); AP.larga = g.classList.contains('ap-larga'); apColonne(); apStatoVista();   // v18: non si ricorda più
   };
   $('#ap-v-ind', box).onclick = () => { if (AP.ed && AP.ed.impostaIndice) AP.ed.impostaIndice(!AP.ed.indiceAperto); };
   // telefono: si legge; la barra degli strumenti compare con ✎
@@ -1129,7 +1135,7 @@ function apMisuraFinestraOra() {
   if (st !== apModoStretto) {
     const g = $('.ap-guscio');
     if (g) g.classList.remove('ap-pannello-su');
-    if (g && !st) g.classList.toggle('ap-larga', !!LS.get('apLarga', false));   // v12.3: tornando larga, la scelta di Sezioni
+    if (g && !st) g.classList.toggle('ap-larga', !!AP.larga);   // v12.3: tornando larga, la scelta di Sezioni
     if (AP.ed && AP.ed.cambioModo) AP.ed.cambioModo();
   }
   apModoStretto = st;
